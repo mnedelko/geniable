@@ -36,45 +36,78 @@ class ServiceValidator:
         """
         self.timeout = timeout
 
-    def validate_langsmith(self, api_key: str) -> ValidationResult:
-        """Validate LangSmith API key.
+    def validate_langsmith(
+        self, api_key: str, queue_name: Optional[str] = None
+    ) -> ValidationResult:
+        """Validate LangSmith API key and optionally the annotation queue.
 
         Args:
             api_key: LangSmith API key (should start with 'ls_')
+            queue_name: Optional annotation queue name to validate
 
         Returns:
             Validation result
         """
         try:
+            # First validate API key
             response = requests.get(
                 "https://api.smith.langchain.com/api/v1/workspaces",
                 headers={"x-api-key": api_key},
                 timeout=self.timeout,
             )
 
-            if response.status_code == 200:
-                data = response.json()
-                workspace_count = len(data) if isinstance(data, list) else 1
-                return ValidationResult(
-                    service="LangSmith",
-                    success=True,
-                    message=f"Connected ({workspace_count} workspace(s))",
-                    details={"status_code": 200},
-                )
-            elif response.status_code == 401:
+            if response.status_code == 401:
                 return ValidationResult(
                     service="LangSmith",
                     success=False,
                     message="Invalid API key",
                     details={"status_code": 401},
                 )
-            else:
+            elif response.status_code != 200:
                 return ValidationResult(
                     service="LangSmith",
                     success=False,
                     message=f"Unexpected response: {response.status_code}",
                     details={"status_code": response.status_code},
                 )
+
+            data = response.json()
+            workspace_count = len(data) if isinstance(data, list) else 1
+
+            # If queue name provided, validate it exists
+            if queue_name:
+                queue_response = requests.get(
+                    "https://api.smith.langchain.com/api/v1/annotation-queues",
+                    headers={"x-api-key": api_key},
+                    timeout=self.timeout,
+                )
+
+                if queue_response.status_code == 200:
+                    queues = queue_response.json()
+                    queue_names = [q.get("name", "") for q in queues]
+                    if queue_name not in queue_names:
+                        # Provide helpful suggestion for typos
+                        suggestion = ""
+                        for q in queue_names:
+                            if q.lower().replace(" ", "") == queue_name.lower().replace(" ", ""):
+                                suggestion = f" Did you mean '{q}'?"
+                                break
+                        return ValidationResult(
+                            service="LangSmith",
+                            success=False,
+                            message=f"Annotation queue '{queue_name}' not found.{suggestion}",
+                            details={
+                                "status_code": 200,
+                                "available_queues": queue_names[:5],  # Show first 5
+                            },
+                        )
+
+            return ValidationResult(
+                service="LangSmith",
+                success=True,
+                message=f"Connected ({workspace_count} workspace(s))",
+                details={"status_code": 200},
+            )
 
         except requests.exceptions.Timeout:
             return ValidationResult(
@@ -394,10 +427,13 @@ class ServiceValidator:
         """
         results = []
 
-        # Validate LangSmith
+        # Validate LangSmith (API key + queue name)
         if "langsmith" in config:
             results.append(
-                self.validate_langsmith(config["langsmith"]["api_key"])
+                self.validate_langsmith(
+                    api_key=config["langsmith"]["api_key"],
+                    queue_name=config["langsmith"].get("queue"),
+                )
             )
 
         # Validate AWS endpoints
