@@ -20,7 +20,12 @@ class MCPClient:
     MCP-specific functionality like schema validation and tool caching.
     """
 
-    def __init__(self, evaluation_endpoint: str, api_key: Optional[str] = None, auth_token: Optional[str] = None):
+    def __init__(
+        self,
+        evaluation_endpoint: str,
+        api_key: Optional[str] = None,
+        auth_token: Optional[str] = None,
+    ):
         """Initialize the MCP client.
 
         Args:

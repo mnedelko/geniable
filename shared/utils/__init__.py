@@ -1,5 +1,5 @@
 """Shared utilities."""
 
-from shared.utils.logging import setup_logging, get_logger
+from shared.utils.logging import get_logger, setup_logging
 
 __all__ = ["setup_logging", "get_logger"]

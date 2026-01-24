@@ -78,9 +78,7 @@ class EvaluationOrchestrator:
         logger.info(f"Executing {len(evaluations)} evaluations for thread {thread_id}")
         return self._client.execute_batch(thread_id, evaluations)
 
-    def _build_input(
-        self, tool_name: str, thread_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _build_input(self, tool_name: str, thread_data: Dict[str, Any]) -> Dict[str, Any]:
         """Build input for a specific tool.
 
         Args:
@@ -123,9 +121,7 @@ class EvaluationOrchestrator:
 
         return input_data
 
-    def get_failing_evaluations(
-        self, response: EvaluationResponse
-    ) -> List[EvaluationResult]:
+    def get_failing_evaluations(self, response: EvaluationResponse) -> List[EvaluationResult]:
         """Get evaluations that failed or had warnings.
 
         Args:

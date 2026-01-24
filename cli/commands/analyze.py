@@ -1,31 +1,132 @@
 """Analysis commands for thread processing."""
 
 import logging
+import os
 from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.prompt import IntPrompt, Confirm
+from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 
 from cli.config_manager import ConfigManager
 from cli.output_formatter import (
-    print_success,
-    print_error,
-    print_warning,
-    print_info,
-    print_header,
-    create_progress,
     ThreadLoadingProgress,
+    create_progress,
+    print_error,
+    print_header,
+    print_info,
+    print_success,
+    print_warning,
 )
 
 console = Console()
 app = typer.Typer(help="Thread analysis commands")
 
 
+def _get_anthropic_api_key(config_manager: ConfigManager) -> Optional[str]:
+    """Get Anthropic API key from environment, config, or secrets.
+
+    Priority order:
+    1. ANTHROPIC_API_KEY environment variable
+    2. Config file (anthropic.api_key)
+    3. AWS Secrets Manager (if authenticated)
+
+    Returns:
+        API key if found, None otherwise
+    """
+    # 1. Check environment variable
+    if key := os.environ.get("ANTHROPIC_API_KEY"):
+        return key
+
+    # 2. Check local config
+    try:
+        config = config_manager.load()
+        if config.anthropic and config.anthropic.api_key:
+            return config.anthropic.api_key
+    except Exception:
+        pass
+
+    # 3. Check AWS Secrets Manager (if we have auth token)
+    try:
+        from cli.secrets_manager import SecretsManagerClient
+
+        auth_token = _get_auth_token()
+        if auth_token:
+            secrets_client = SecretsManagerClient()
+            secret = secrets_client.get_secret("anthropic")
+            if secret and secret.get("api_key"):
+                return secret["api_key"]
+    except Exception:
+        pass
+
+    return None
+
+
+def _prompt_for_anthropic_key(config_manager: ConfigManager) -> str:
+    """Prompt user for Anthropic API key and optionally store it.
+
+    Returns:
+        The API key entered by the user
+
+    Raises:
+        typer.Exit: If user cancels or provides invalid key
+    """
+    console.print()
+    console.print("[yellow]Anthropic API key required for LLM-powered reports.[/yellow]")
+    console.print("Get your API key from: [link]https://console.anthropic.com/settings/keys[/link]")
+    console.print()
+
+    api_key = Prompt.ask("Enter your Anthropic API key", password=True)
+
+    if not api_key:
+        print_error("API key is required for --ci mode")
+        raise typer.Exit(1)
+
+    if not api_key.startswith("sk-ant-"):
+        print_warning("API key should typically start with 'sk-ant-'")
+        if not Confirm.ask("Continue anyway?", default=False):
+            raise typer.Exit(1)
+
+    # Ask if user wants to save the key
+    if Confirm.ask("Save API key to config for future use?", default=True):
+        try:
+            config = config_manager.load()
+            from shared.models.config import AnthropicConfig
+
+            config.anthropic = AnthropicConfig(api_key=api_key)
+            config_manager.save(config)
+            print_success("API key saved to config")
+        except Exception as e:
+            print_warning(f"Could not save to config: {e}")
+
+    return api_key
+
+
+def _setup_ci_mode(config_manager: ConfigManager) -> str:
+    """Set up CI mode with Anthropic API key.
+
+    Returns:
+        The API key to use
+
+    Raises:
+        typer.Exit: If API key cannot be obtained
+    """
+    api_key = _get_anthropic_api_key(config_manager)
+
+    if not api_key:
+        api_key = _prompt_for_anthropic_key(config_manager)
+
+    # Set environment variable for the session
+    os.environ["ANTHROPIC_API_KEY"] = api_key
+
+    return api_key
+
+
 def _require_auth():
     """Require authentication before proceeding."""
     import typer as t
+
     try:
         from cli.auth import get_auth_client
 
@@ -68,10 +169,19 @@ def analyze_latest(
     limit: int = typer.Option(50, "--limit", "-l", help="Maximum threads to analyze"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Analyze without creating tickets"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    ci: bool = typer.Option(
+        False,
+        "--ci",
+        help="Enable LLM-powered reports using Anthropic API (requires API key)",
+    ),
 ):
     """Analyze latest annotated threads from LangSmith queue.
 
     Fetches new threads since the last poll and runs evaluation pipeline.
+
+    Use --ci flag for AI-powered insights in reports (requires Anthropic API key).
+    The API key can be set via ANTHROPIC_API_KEY environment variable, config file,
+    or you will be prompted to enter it.
     """
     # Check auth status (optional for now)
     _require_auth()
@@ -93,6 +203,14 @@ def analyze_latest(
         print_info("Loading configuration...")
         config_manager = ConfigManager()
         config = config_manager.load()
+
+        # Handle --ci flag for LLM-powered reports
+        ci_mode = False
+        if ci:
+            print_info("Setting up LLM-powered reports (CI mode)...")
+            _setup_ci_mode(config_manager)
+            ci_mode = True
+            print_success("CI mode enabled - reports will include AI-powered insights")
 
         # Import agent
         from agent.agent import Agent, AgentConfig
@@ -129,6 +247,7 @@ def analyze_latest(
             project=config.langsmith.project,
             jira_project_key=jira_project_key,
             notion_database_id=notion_database_id,
+            ci_mode=ci_mode,
         )
 
         # Create agent and run with progress display
@@ -187,10 +306,17 @@ def analyze_latest(
 def analyze_specific(
     count: int = typer.Option(10, "--count", "-c", help="Number of recent threads to show"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    ci: bool = typer.Option(
+        False,
+        "--ci",
+        help="Enable LLM-powered reports using Anthropic API (requires API key)",
+    ),
 ):
     """Select and analyze a specific thread interactively.
 
     Displays a table of recent threads and prompts for selection.
+
+    Use --ci flag for AI-powered insights in reports (requires Anthropic API key).
     """
     # Check auth status (optional for now)
     _require_auth()
@@ -212,6 +338,14 @@ def analyze_specific(
         print_info("Loading configuration...")
         config_manager = ConfigManager()
         config = config_manager.load()
+
+        # Handle --ci flag for LLM-powered reports
+        ci_mode = False
+        if ci:
+            print_info("Setting up LLM-powered reports (CI mode)...")
+            _setup_ci_mode(config_manager)
+            ci_mode = True
+            print_success("CI mode enabled - reports will include AI-powered insights")
 
         # Import required modules
         from agent.agent import Agent, AgentConfig
@@ -351,6 +485,7 @@ def analyze_specific(
             project=config.langsmith.project,
             jira_project_key=jira_project_key,
             notion_database_id=notion_database_id,
+            ci_mode=ci_mode,
         )
 
         # Create agent and analyze
@@ -365,7 +500,7 @@ def analyze_specific(
         # Generate report
         from agent.report_generator import ReportGenerator
 
-        reporter = ReportGenerator(config.defaults.report_dir)
+        reporter = ReportGenerator(output_dir=config.defaults.report_dir, use_llm=ci_mode)
         report_path = reporter.generate_thread_report(
             thread=selected_thread.to_dict(),
             eval_result=result.evaluation,
@@ -426,6 +561,114 @@ def analyze_specific(
         raise typer.Exit(0)
     except Exception as e:
         print_error(f"Analysis failed: {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(1)
+
+
+@app.command("fetch")
+def fetch(
+    limit: int = typer.Option(5, "--limit", "-l", help="Number of threads to fetch"),
+    thread_id: Optional[str] = typer.Option(
+        None, "--thread-id", "-t", help="Fetch a specific thread by ID"
+    ),
+    output: str = typer.Option("json", "--output", "-o", help="Output format: json or yaml"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+):
+    """Fetch thread data without analysis (for Claude Code skill integration).
+
+    This command fetches raw thread data from LangSmith and outputs it in a
+    structured format suitable for analysis by Claude Code's native intelligence.
+
+    Examples:
+
+        geni fetch --limit 5 --output json
+
+        geni fetch --thread-id abc123 --output json
+
+        geni fetch --limit 10 | claude "Analyze these threads"
+    """
+    # Check auth status
+    _require_auth()
+
+    # Suppress logs for clean JSON/YAML output
+    if not verbose:
+        logging.basicConfig(level=logging.ERROR)
+        logging.getLogger("agent").setLevel(logging.ERROR)
+        logging.getLogger("urllib3").setLevel(logging.ERROR)
+
+    try:
+        # Load configuration
+        config_manager = ConfigManager()
+        config = config_manager.load()
+
+        # Import required modules
+        from agent.api_clients.integration_client import IntegrationServiceClient
+
+        # Get auth token for API calls
+        auth_token = _get_auth_token()
+
+        # Initialize client
+        integration = IntegrationServiceClient(
+            endpoint=config.aws.integration_endpoint,
+            api_key=config.aws.api_key,
+            auth_token=auth_token,
+        )
+
+        # Fetch threads
+        if thread_id:
+            # Fetch specific thread by ID
+            threads = integration.get_annotated_threads(
+                limit=1,
+                with_details=True,
+            )
+            # Filter to the specific thread
+            threads = [t for t in threads if t.thread_id == thread_id]
+            if not threads:
+                print_error(f"Thread not found: {thread_id}", file=console.file)
+                raise typer.Exit(1)
+        else:
+            # Fetch latest threads
+            threads = integration.get_annotated_threads(
+                limit=limit,
+                with_details=True,
+            )
+
+        if not threads:
+            # Output empty array for consistent parsing
+            if output == "json":
+                print("[]")
+            else:
+                print("[]")
+            return
+
+        # Convert to serializable format
+        thread_data = [t.to_dict() for t in threads]
+
+        # Output in requested format
+        if output == "json":
+            import json
+
+            print(json.dumps(thread_data, indent=2, default=str))
+        elif output == "yaml":
+            try:
+                import yaml
+
+                print(yaml.dump(thread_data, default_flow_style=False, allow_unicode=True))
+            except ImportError:
+                print_error("PyYAML is required for YAML output. Install with: pip install pyyaml")
+                raise typer.Exit(1)
+        else:
+            print_error(f"Unsupported output format: {output}")
+            print_info("Supported formats: json, yaml")
+            raise typer.Exit(1)
+
+    except FileNotFoundError as e:
+        print_error(str(e))
+        print_info("Run 'geni init' to set up configuration")
+        raise typer.Exit(1)
+    except Exception as e:
+        print_error(f"Fetch failed: {e}")
         if verbose:
             console.print_exception()
         raise typer.Exit(1)

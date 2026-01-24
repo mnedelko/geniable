@@ -178,7 +178,9 @@ class IntegrationServiceClient:
                         if progress_callback:
                             progress_callback("details", i + 1, len(threads_data), thread_id)
                         try:
-                            logger.info(f"Fetching details {i + 1}/{len(threads_data)}: {thread_id}")
+                            logger.info(
+                                f"Fetching details {i + 1}/{len(threads_data)}: {thread_id}"
+                            )
                             thread_details = self.get_thread_details(thread_id)
                             detailed_threads.append(thread_details)
                         except Exception as e:

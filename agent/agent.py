@@ -18,16 +18,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from agent.api_clients.integration_client import IntegrationServiceClient, ThreadData, ProgressCallback
 from agent.api_clients.evaluation_client import EvaluationServiceClient
-from agent.mcp_client import MCPClient
+from agent.api_clients.integration_client import (
+    IntegrationServiceClient,
+    ProgressCallback,
+    ThreadData,
+)
+from agent.cloud_sync import CloudSyncClient
 from agent.evaluation_orchestrator import EvaluationOrchestrator
+from agent.mcp_client import MCPClient
+from agent.models.evaluation import EvaluationResponse
 from agent.report_generator import ReportGenerator
 from agent.state_manager import StateManager
-from agent.cloud_sync import CloudSyncClient
-from agent.models.evaluation import EvaluationResponse
-
-from shared.models.issue_card import IssueCard, Sources, EvaluationResult, AffectedCode
+from shared.models.issue_card import AffectedCode, EvaluationResult, IssueCard, Sources
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +51,7 @@ class AgentConfig:
         notion_database_id: Optional[str] = None,
         cloud_sync_enabled: bool = False,
         cloud_sync_mode: Literal["immediate", "batch", "manual"] = "immediate",
+        ci_mode: bool = False,
     ):
         self.integration_endpoint = integration_endpoint
         self.evaluation_endpoint = evaluation_endpoint
@@ -60,6 +64,7 @@ class AgentConfig:
         self.notion_database_id = notion_database_id
         self.cloud_sync_enabled = cloud_sync_enabled
         self.cloud_sync_mode = cloud_sync_mode
+        self.ci_mode = ci_mode
 
 
 class AnalysisResult:
@@ -82,18 +87,12 @@ class AnalysisResult:
     @property
     def has_issues(self) -> bool:
         """Check if any evaluations failed."""
-        return any(
-            r.status in ("fail", "warning")
-            for r in self.evaluation.results
-        )
+        return any(r.status in ("fail", "warning") for r in self.evaluation.results)
 
     @property
     def issues_count(self) -> int:
         """Count the number of issues (warnings + failures)."""
-        return sum(
-            1 for r in self.evaluation.results
-            if r.status in ("fail", "warning")
-        )
+        return sum(1 for r in self.evaluation.results if r.status in ("fail", "warning"))
 
 
 class Agent:
@@ -123,13 +122,18 @@ class Agent:
             api_key=config.api_key,
             auth_token=config.auth_token,
         )
-        self._mcp = MCPClient(config.evaluation_endpoint, config.api_key, auth_token=config.auth_token)
+        self._mcp = MCPClient(
+            config.evaluation_endpoint, config.api_key, auth_token=config.auth_token
+        )
         self._orchestrator = EvaluationOrchestrator(
             evaluation_endpoint=config.evaluation_endpoint,
             api_key=config.api_key,
             auth_token=config.auth_token,
         )
-        self._reporter = ReportGenerator(config.report_dir)
+        self._reporter = ReportGenerator(
+            output_dir=config.report_dir,
+            use_llm=config.ci_mode,  # Use LLM only when --ci flag is set
+        )
         self._state = StateManager(
             project=config.project,
             state_dir=str(config.report_dir),
@@ -199,9 +203,7 @@ class Agent:
             issue_card=issue_card,
         )
 
-    def _create_issue_card(
-        self, thread: ThreadData, evaluation: EvaluationResponse
-    ) -> IssueCard:
+    def _create_issue_card(self, thread: ThreadData, evaluation: EvaluationResponse) -> IssueCard:
         """Create an issue card from evaluation results.
 
         Args:
@@ -239,8 +241,12 @@ class Agent:
         # Build details
         details_parts = []
         for result in evaluation.results:
-            status_icon = "✅" if result.status == "pass" else "⚠️" if result.status == "warning" else "❌"
-            details_parts.append(f"- {status_icon} {result.tool}: {result.message or result.status}")
+            status_icon = (
+                "✅" if result.status == "pass" else "⚠️" if result.status == "warning" else "❌"
+            )
+            details_parts.append(
+                f"- {status_icon} {result.tool}: {result.message or result.status}"
+            )
 
         details = "\n".join(details_parts)
 
@@ -256,7 +262,9 @@ class Agent:
             elif "content" in result.tool.lower():
                 recommendations.append("- Improve response quality and relevance")
 
-        recommendation = "\n".join(recommendations) if recommendations else "Review evaluation results"
+        recommendation = (
+            "\n".join(recommendations) if recommendations else "Review evaluation results"
+        )
 
         # Create issue card
         return IssueCard(
@@ -453,22 +461,28 @@ class Agent:
 
                     # Prepare ticket info for report update
                     if provider == "jira":
-                        jira_tickets_for_report.append({
-                            "key": ticket_response.get("issue_key", ticket_id),
-                            "url": ticket_url,
-                        })
+                        jira_tickets_for_report.append(
+                            {
+                                "key": ticket_response.get("issue_key", ticket_id),
+                                "url": ticket_url,
+                            }
+                        )
                     else:
-                        notion_tickets_for_report.append({
-                            "id": ticket_id,
-                            "url": ticket_url,
-                        })
+                        notion_tickets_for_report.append(
+                            {
+                                "id": ticket_id,
+                                "url": ticket_url,
+                            }
+                        )
 
                     # Update the report with ticket information
                     if result.report_path:
                         self._reporter.update_report_with_tickets(
                             report_path=Path(result.report_path),
                             jira_tickets=jira_tickets_for_report if provider == "jira" else None,
-                            notion_tickets=notion_tickets_for_report if provider == "notion" else None,
+                            notion_tickets=(
+                                notion_tickets_for_report if provider == "notion" else None
+                            ),
                         )
 
             # Record successful processing in state
@@ -491,10 +505,7 @@ class Agent:
                 )
 
                 # Immediate cloud sync if enabled
-                if (
-                    self._cloud_sync
-                    and self.config.cloud_sync_mode == "immediate"
-                ):
+                if self._cloud_sync and self.config.cloud_sync_mode == "immediate":
                     self._cloud_sync.sync_thread_result(
                         thread_id=result.thread.thread_id,
                         name=result.thread.name,
@@ -513,16 +524,16 @@ class Agent:
         if not dry_run and tickets_created > 0:
             self._state.update_sync_summary(
                 total_issues_synced=total_issues_synced,
-                jira_project_key=self.config.jira_project_key if self.config.provider == "jira" else None,
-                notion_database_id=self.config.notion_database_id if self.config.provider == "notion" else None,
+                jira_project_key=(
+                    self.config.jira_project_key if self.config.provider == "jira" else None
+                ),
+                notion_database_id=(
+                    self.config.notion_database_id if self.config.provider == "notion" else None
+                ),
             )
 
         # Batch cloud sync if enabled
-        if (
-            not dry_run
-            and self._cloud_sync
-            and self.config.cloud_sync_mode == "batch"
-        ):
+        if not dry_run and self._cloud_sync and self.config.cloud_sync_mode == "batch":
             state = self._state.load()
             self._cloud_sync.sync_full_state(state.model_dump())
             logger.info("Batch cloud sync completed")

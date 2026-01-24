@@ -56,7 +56,11 @@ class AuthTokens:
             return True
         buffer_seconds = 300  # 5 minutes
         now = datetime.now(timezone.utc)
-        expires = self.expires_at if self.expires_at.tzinfo else self.expires_at.replace(tzinfo=timezone.utc)
+        expires = (
+            self.expires_at
+            if self.expires_at.tzinfo
+            else self.expires_at.replace(tzinfo=timezone.utc)
+        )
         return now > expires - timedelta(seconds=buffer_seconds)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -103,6 +107,7 @@ class TokenStorage:
         if use_keyring:
             try:
                 import keyring
+
                 self._keyring = keyring
             except ImportError:
                 logger.debug("keyring not available, using file storage")
@@ -236,6 +241,7 @@ class CognitoAuthClient:
         """Lazy-load Cognito client."""
         if self._client is None:
             import boto3
+
             self._client = boto3.client(
                 "cognito-idp",
                 region_name=self.region,
@@ -541,10 +547,13 @@ class CognitoAuthClient:
         x = int(x_hash.hex(), 16)
 
         # Compute k
-        k = int(self._hash_sha256(
-            bytes.fromhex(self._pad_hex(self._N_HEX)) +
-            bytes.fromhex(self._pad_hex(self._g_hex))
-        ).hex(), 16)
+        k = int(
+            self._hash_sha256(
+                bytes.fromhex(self._pad_hex(self._N_HEX))
+                + bytes.fromhex(self._pad_hex(self._g_hex))
+            ).hex(),
+            16,
+        )
 
         # Compute S = (B - k * g^x) ^ (a + u * x) mod N
         g_mod = pow(g, x, n)
@@ -573,8 +582,8 @@ class CognitoAuthClient:
     def _compute_u(self, large_a: int, large_b: int) -> int:
         """Compute SRP u value."""
         u_hex = self._hash_sha256(
-            bytes.fromhex(self._pad_hex(self._long_to_hex(large_a))) +
-            bytes.fromhex(self._pad_hex(self._long_to_hex(large_b)))
+            bytes.fromhex(self._pad_hex(self._long_to_hex(large_a)))
+            + bytes.fromhex(self._pad_hex(self._long_to_hex(large_b)))
         ).hex()
         return int(u_hex, 16)
 

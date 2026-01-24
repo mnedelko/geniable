@@ -49,6 +49,10 @@ class SecretsManagerClient:
             "secret_suffix": "aws-gateway",
             "fields": ["api_key"],
         },
+        "anthropic": {
+            "secret_suffix": "anthropic",
+            "fields": ["api_key"],
+        },
     }
 
     def __init__(
@@ -74,6 +78,7 @@ class SecretsManagerClient:
         if self._client is None:
             try:
                 import boto3
+
                 self._client = boto3.client("secretsmanager", region_name=self.region)
             except ImportError:
                 raise ImportError(
@@ -182,27 +187,25 @@ class SecretsManagerClient:
 
         # Sync LangSmith credentials
         if "langsmith" in config:
-            results.append(
-                self.sync_secret("langsmith", config["langsmith"])
-            )
+            results.append(self.sync_secret("langsmith", config["langsmith"]))
 
         # Sync AWS Gateway API key (if set)
         if "aws" in config and config["aws"].get("api_key"):
-            results.append(
-                self.sync_secret("aws", {"api_key": config["aws"]["api_key"]})
-            )
+            results.append(self.sync_secret("aws", {"api_key": config["aws"]["api_key"]}))
 
         # Sync provider credentials
         provider = config.get("provider", "none")
 
         if provider == "jira" and "jira" in config:
-            results.append(
-                self.sync_secret("jira", config["jira"])
-            )
+            results.append(self.sync_secret("jira", config["jira"]))
 
         if provider == "notion" and "notion" in config:
+            results.append(self.sync_secret("notion", config["notion"]))
+
+        # Sync Anthropic API key (for LLM-powered reports)
+        if "anthropic" in config and config["anthropic"].get("api_key"):
             results.append(
-                self.sync_secret("notion", config["notion"])
+                self.sync_secret("anthropic", {"api_key": config["anthropic"]["api_key"]})
             )
 
         return results
@@ -294,12 +297,14 @@ class SecretsManagerClient:
                 Filters=[{"Key": "name", "Values": [f"{self.secret_prefix}/"]}]
             ):
                 for secret in page.get("SecretList", []):
-                    secrets.append({
-                        "name": secret["Name"],
-                        "description": secret.get("Description", ""),
-                        "last_changed": secret.get("LastChangedDate"),
-                        "created": secret.get("CreatedDate"),
-                    })
+                    secrets.append(
+                        {
+                            "name": secret["Name"],
+                            "description": secret.get("Description", ""),
+                            "last_changed": secret.get("LastChangedDate"),
+                            "created": secret.get("CreatedDate"),
+                        }
+                    )
 
             return secrets
 
@@ -317,8 +322,7 @@ class SecretsManagerClient:
             client = self._get_client()
             # Try to list secrets with our prefix (even if none exist)
             client.list_secrets(
-                MaxResults=1,
-                Filters=[{"Key": "name", "Values": [f"{self.secret_prefix}/"]}]
+                MaxResults=1, Filters=[{"Key": "name", "Values": [f"{self.secret_prefix}/"]}]
             )
             return True
 

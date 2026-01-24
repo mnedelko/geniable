@@ -1,8 +1,8 @@
 """Input validators for CLI commands."""
 
 import re
-from typing import Optional
 from pathlib import Path
+from typing import Optional
 
 
 def validate_url(url: str) -> bool:
@@ -15,12 +15,14 @@ def validate_url(url: str) -> bool:
         True if valid
     """
     pattern = re.compile(
-        r'^https?://'  # http:// or https://
-        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|'  # domain
-        r'localhost|'  # localhost
-        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # or IP
-        r'(?::\d+)?'  # optional port
-        r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+        r"^https?://"  # http:// or https://
+        r"(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|"  # domain
+        r"localhost|"  # localhost
+        r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})"  # or IP
+        r"(?::\d+)?"  # optional port
+        r"(?:/?|[/?]\S+)$",
+        re.IGNORECASE,
+    )
     return bool(pattern.match(url))
 
 
@@ -33,7 +35,7 @@ def validate_email(email: str) -> bool:
     Returns:
         True if valid
     """
-    pattern = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+    pattern = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
     return bool(pattern.match(email))
 
 
@@ -65,7 +67,7 @@ def validate_project_key(key: str) -> bool:
     Returns:
         True if valid
     """
-    pattern = re.compile(r'^[A-Z][A-Z0-9_]{1,9}$')
+    pattern = re.compile(r"^[A-Z][A-Z0-9_]{1,9}$")
     return bool(pattern.match(key.upper()))
 
 

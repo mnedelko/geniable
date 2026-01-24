@@ -5,8 +5,8 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from agent.models.mcp import MCPDiscoveryResponse, MCPToolDefinition
 from agent.models.evaluation import EvaluationRequest, EvaluationResponse, SingleEvaluationRequest
+from agent.models.mcp import MCPDiscoveryResponse, MCPToolDefinition
 
 logger = logging.getLogger(__name__)
 

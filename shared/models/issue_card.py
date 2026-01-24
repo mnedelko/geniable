@@ -83,9 +83,7 @@ class IssueCard(BaseModel):
     status: str = Field(default="BACKLOG", description="Issue workflow status")
     details: str = Field(..., description="Detailed issue description with context")
     description: str = Field(..., description="Brief summary of the issue")
-    recommendation: str = Field(
-        ..., description="Suggested fixes or improvement actions"
-    )
+    recommendation: str = Field(..., description="Suggested fixes or improvement actions")
     affected_code: Optional[AffectedCode] = Field(
         default=None, description="Code location and improvement suggestions"
     )
@@ -95,12 +93,8 @@ class IssueCard(BaseModel):
     evaluation_results: List[EvaluationResult] = Field(
         default_factory=list, description="Results from evaluation tools"
     )
-    created_at: datetime = Field(
-        default_factory=datetime.utcnow, description="Creation timestamp"
-    )
-    issue_id: Optional[str] = Field(
-        default=None, description="Generated issue ID (e.g., IA-001)"
-    )
+    created_at: datetime = Field(default_factory=datetime.utcnow, description="Creation timestamp")
+    issue_id: Optional[str] = Field(default=None, description="Generated issue ID (e.g., IA-001)")
 
     class Config:
         """Pydantic model configuration."""

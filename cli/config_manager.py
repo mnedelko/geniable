@@ -8,7 +8,6 @@ import yaml
 
 from shared.models.config import AppConfig
 
-
 DEFAULT_CONFIG_PATH = Path.home() / ".geniable.yaml"
 
 
@@ -251,24 +250,28 @@ defaults:
 
         # LangSmith section
         if "langsmith" in config:
-            lines.extend([
-                "langsmith:",
-                f'  api_key: "{config["langsmith"]["api_key"]}"',
-                f'  project: "{config["langsmith"]["project"]}"',
-                f'  queue: "{config["langsmith"]["queue"]}"',
-                "",
-            ])
+            lines.extend(
+                [
+                    "langsmith:",
+                    f'  api_key: "{config["langsmith"]["api_key"]}"',
+                    f'  project: "{config["langsmith"]["project"]}"',
+                    f'  queue: "{config["langsmith"]["queue"]}"',
+                    "",
+                ]
+            )
 
         # AWS section
         if "aws" in config:
-            lines.extend([
-                "aws:",
-                f'  region: "{config["aws"]["region"]}"',
-                f'  integration_endpoint: "{config["aws"]["integration_endpoint"]}"',
-                f'  evaluation_endpoint: "{config["aws"]["evaluation_endpoint"]}"',
-                f'  api_key: "{config["aws"].get("api_key", "")}"',
-                "",
-            ])
+            lines.extend(
+                [
+                    "aws:",
+                    f'  region: "{config["aws"]["region"]}"',
+                    f'  integration_endpoint: "{config["aws"]["integration_endpoint"]}"',
+                    f'  evaluation_endpoint: "{config["aws"]["evaluation_endpoint"]}"',
+                    f'  api_key: "{config["aws"].get("api_key", "")}"',
+                    "",
+                ]
+            )
 
         # Provider
         provider = config.get("provider", "none")
@@ -277,32 +280,38 @@ defaults:
 
         # Jira section
         if "jira" in config:
-            lines.extend([
-                "jira:",
-                f'  base_url: "{config["jira"]["base_url"]}"',
-                f'  email: "{config["jira"]["email"]}"',
-                f'  api_token: "{config["jira"]["api_token"]}"',
-                f'  project_key: "{config["jira"]["project_key"]}"',
-            ])
+            lines.extend(
+                [
+                    "jira:",
+                    f'  base_url: "{config["jira"]["base_url"]}"',
+                    f'  email: "{config["jira"]["email"]}"',
+                    f'  api_token: "{config["jira"]["api_token"]}"',
+                    f'  project_key: "{config["jira"]["project_key"]}"',
+                ]
+            )
             if "issue_type" in config["jira"]:
                 lines.append(f'  issue_type: "{config["jira"]["issue_type"]}"')
             lines.append("")
 
         # Notion section
         if "notion" in config:
-            lines.extend([
-                "notion:",
-                f'  api_key: "{config["notion"]["api_key"]}"',
-                f'  database_id: "{config["notion"]["database_id"]}"',
-                "",
-            ])
+            lines.extend(
+                [
+                    "notion:",
+                    f'  api_key: "{config["notion"]["api_key"]}"',
+                    f'  database_id: "{config["notion"]["database_id"]}"',
+                    "",
+                ]
+            )
 
         # Defaults section
         if "defaults" in config:
-            lines.extend([
-                "defaults:",
-                f'  report_dir: "{config["defaults"]["report_dir"]}"',
-                f'  log_level: "{config["defaults"]["log_level"]}"',
-            ])
+            lines.extend(
+                [
+                    "defaults:",
+                    f'  report_dir: "{config["defaults"]["report_dir"]}"',
+                    f'  log_level: "{config["defaults"]["log_level"]}"',
+                ]
+            )
 
         return "\n".join(lines) + "\n"

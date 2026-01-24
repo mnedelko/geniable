@@ -7,9 +7,9 @@ from typing import Any, Dict, List, Optional
 import questionary
 from rich.console import Console
 
-from cli.validators import validate_url, validate_email, validate_api_key, validate_project_key
-from cli.service_validator import ServiceValidator, ValidationResult
 from cli.claude_code_setup import ClaudeCodeSetup
+from cli.service_validator import ServiceValidator, ValidationResult
+from cli.validators import validate_api_key, validate_email, validate_project_key, validate_url
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -143,8 +143,7 @@ class ConfigWizard:
         # Use stored token from auth context
         if not self._id_token:
             raise RuntimeError(
-                "No authentication token available.\n"
-                "Please run 'geni login' first."
+                "No authentication token available.\n" "Please run 'geni login' first."
             )
 
         # Get API endpoint from config
@@ -217,8 +216,7 @@ class ConfigWizard:
                 console.print("[dim]Your credentials are stored securely per-user in AWS.[/dim]")
             elif response.status_code == 401:
                 raise RuntimeError(
-                    "Session expired.\n"
-                    "Please run 'geni login' to re-authenticate."
+                    "Session expired.\n" "Please run 'geni login' to re-authenticate."
                 )
             else:
                 error_detail = ""
@@ -262,7 +260,9 @@ class ConfigWizard:
 
         if not all_passed:
             console.print("\n[yellow]Some validations failed.[/yellow]")
-            console.print("[dim]Your configuration has been saved. You can re-validate with 'geni validate'[/dim]")
+            console.print(
+                "[dim]Your configuration has been saved. You can re-validate with 'geni validate'[/dim]"
+            )
         else:
             console.print("\n[green]All services validated successfully![/green]")
 
@@ -291,7 +291,8 @@ class ConfigWizard:
         """Capture LangSmith configuration."""
         api_key = questionary.password(
             "LangSmith API Key:",
-            validate=lambda x: validate_api_key(x, prefix="ls") or "Invalid API key format (should start with 'ls')",
+            validate=lambda x: validate_api_key(x, prefix="ls")
+            or "Invalid API key format (should start with 'ls')",
         ).ask()
 
         if api_key is None:
@@ -351,7 +352,8 @@ class ConfigWizard:
 
         project_key = questionary.text(
             "Jira Project Key (e.g., PROJ):",
-            validate=lambda x: validate_project_key(x) or "Invalid project key format (use uppercase letters)",
+            validate=lambda x: validate_project_key(x)
+            or "Invalid project key format (use uppercase letters)",
         ).ask()
 
         if project_key is None:
@@ -381,7 +383,8 @@ class ConfigWizard:
 
         api_key = questionary.password(
             "Notion API Key (starts with 'secret_'):",
-            validate=lambda x: x.startswith("secret_") or "Notion API key should start with 'secret_'",
+            validate=lambda x: x.startswith("secret_")
+            or "Notion API key should start with 'secret_'",
         ).ask()
 
         if api_key is None:
@@ -389,7 +392,9 @@ class ConfigWizard:
 
         database_id = questionary.text(
             "Notion Database ID:",
-            validate=lambda x: len(x) == 32 or len(x) == 36 or "Database ID should be 32 characters (without dashes) or 36 (with dashes)",
+            validate=lambda x: len(x) == 32
+            or len(x) == 36
+            or "Database ID should be 32 characters (without dashes) or 36 (with dashes)",
         ).ask()
 
         if database_id is None:

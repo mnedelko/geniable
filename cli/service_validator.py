@@ -364,9 +364,7 @@ class ServiceValidator:
                 data = response.json()
                 title_parts = data.get("title", [])
                 db_name = (
-                    title_parts[0].get("plain_text", "Untitled")
-                    if title_parts
-                    else "Untitled"
+                    title_parts[0].get("plain_text", "Untitled") if title_parts else "Untitled"
                 )
                 return ValidationResult(
                     service="Notion",
@@ -415,7 +413,9 @@ class ServiceValidator:
                 message=f"Validation error: {str(e)}",
             )
 
-    def validate_all(self, config: Dict[str, Any], auth_token: Optional[str] = None) -> List[ValidationResult]:
+    def validate_all(
+        self, config: Dict[str, Any], auth_token: Optional[str] = None
+    ) -> List[ValidationResult]:
         """Validate all services based on configuration.
 
         Args:
@@ -442,14 +442,10 @@ class ServiceValidator:
             api_key = aws.get("api_key") or None
 
             results.append(
-                self.validate_integration_endpoint(
-                    aws["integration_endpoint"], api_key, auth_token
-                )
+                self.validate_integration_endpoint(aws["integration_endpoint"], api_key, auth_token)
             )
             results.append(
-                self.validate_evaluation_endpoint(
-                    aws["evaluation_endpoint"], api_key, auth_token
-                )
+                self.validate_evaluation_endpoint(aws["evaluation_endpoint"], api_key, auth_token)
             )
 
         # Validate provider-specific credentials
@@ -468,9 +464,7 @@ class ServiceValidator:
 
         if provider == "notion" and "notion" in config:
             notion = config["notion"]
-            results.append(
-                self.validate_notion(notion["api_key"], notion["database_id"])
-            )
+            results.append(self.validate_notion(notion["api_key"], notion["database_id"]))
 
         return results
 

@@ -38,8 +38,7 @@ def get_agent_source_dir() -> Path:
         pass
 
     raise FileNotFoundError(
-        "Agent source directory not found. "
-        "Ensure the package is installed correctly."
+        "Agent source directory not found. " "Ensure the package is installed correctly."
     )
 
 
@@ -127,14 +126,12 @@ def inject_agent_code(
     # Check for existing directories
     if agent_target.exists() and not overwrite:
         raise FileExistsError(
-            f"Agent directory already exists: {agent_target}\n"
-            "Use --force to overwrite."
+            f"Agent directory already exists: {agent_target}\n" "Use --force to overwrite."
         )
 
     if shared_target and shared_target.exists() and not overwrite:
         raise FileExistsError(
-            f"Shared directory already exists: {shared_target}\n"
-            "Use --force to overwrite."
+            f"Shared directory already exists: {shared_target}\n" "Use --force to overwrite."
         )
 
     with Progress(

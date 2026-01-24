@@ -257,9 +257,7 @@ class StateManager:
         """
         state = self.load()
 
-        success_count = sum(
-            1 for h in state.processing_history if h.status == "success"
-        )
+        success_count = sum(1 for h in state.processing_history if h.status == "success")
         error_count = sum(1 for h in state.processing_history if h.status == "error")
         total_issues = sum(h.issues_created for h in state.processing_history)
 

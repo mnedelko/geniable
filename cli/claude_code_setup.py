@@ -89,12 +89,14 @@ class ClaudeCodeSetup:
         explanation.append("/agent", style="cyan bold")
         explanation.append(" workflow to work effectively with Geniable.", style="dim")
 
-        console.print(Panel(
-            explanation,
-            title="Why is this needed?",
-            border_style="blue",
-            padding=(1, 2),
-        ))
+        console.print(
+            Panel(
+                explanation,
+                title="Why is this needed?",
+                border_style="blue",
+                padding=(1, 2),
+            )
+        )
 
         # Ask if user wants to set up now
         setup_now = questionary.confirm(
@@ -107,7 +109,9 @@ class ClaudeCodeSetup:
 
         if not setup_now:
             console.print("\n[dim]Skipping Claude Code setup.[/dim]")
-            console.print("[dim]You can set this up later by running '/init' in Claude Code.[/dim]\n")
+            console.print(
+                "[dim]You can set this up later by running '/init' in Claude Code.[/dim]\n"
+            )
             return True
 
         # Guide user through the /init process
@@ -137,15 +141,17 @@ class ClaudeCodeSetup:
         console.print()
 
         # Show the commands they need
-        console.print(Panel(
-            "[bold]Commands to run:[/bold]\n\n"
-            f"  cd {self.project_root}\n"
-            "  claude\n"
-            "  /init",
-            title="Quick Reference",
-            border_style="green",
-            padding=(1, 2),
-        ))
+        console.print(
+            Panel(
+                "[bold]Commands to run:[/bold]\n\n"
+                f"  cd {self.project_root}\n"
+                "  claude\n"
+                "  /init",
+                title="Quick Reference",
+                border_style="green",
+                padding=(1, 2),
+            )
+        )
 
         # Wait for user to complete
         console.print()

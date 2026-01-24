@@ -4,6 +4,7 @@ This module defines the configuration schema that is loaded from
 the ~/.geniable.yaml config file or environment variables.
 """
 
+import os
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -14,9 +15,7 @@ class LangSmithConfig(BaseModel):
     """LangSmith API configuration."""
 
     api_key: str = Field(..., description="LangSmith API key")
-    project: str = Field(
-        default="insights-agent-v2", description="LangSmith project name"
-    )
+    project: str = Field(default="insights-agent-v2", description="LangSmith project name")
     queue: str = Field(..., description="Annotation queue name")
 
 
@@ -24,12 +23,8 @@ class AWSConfig(BaseModel):
     """AWS service configuration."""
 
     region: str = Field(default="us-east-1", description="AWS region")
-    integration_endpoint: str = Field(
-        ..., description="Integration Service API endpoint URL"
-    )
-    evaluation_endpoint: str = Field(
-        ..., description="Evaluation Service API endpoint URL"
-    )
+    integration_endpoint: str = Field(..., description="Integration Service API endpoint URL")
+    evaluation_endpoint: str = Field(..., description="Evaluation Service API endpoint URL")
     api_key: Optional[str] = Field(default=None, description="API Gateway API key")
 
 
@@ -50,12 +45,39 @@ class NotionConfig(BaseModel):
     database_id: str = Field(..., description="Notion database ID")
 
 
+class AnthropicConfig(BaseModel):
+    """Anthropic API configuration for LLM-powered reports.
+
+    Used with the --ci flag to enable AI-powered report generation
+    in CI/CD environments.
+    """
+
+    api_key: Optional[str] = Field(
+        default=None,
+        description="Anthropic API key (can also use ANTHROPIC_API_KEY env var)",
+    )
+    model: str = Field(
+        default="claude-sonnet-4-20250514",
+        description="Model to use for report generation",
+    )
+    max_tokens: int = Field(
+        default=4096,
+        description="Maximum tokens for LLM responses",
+    )
+
+    @classmethod
+    def from_env(cls) -> "AnthropicConfig":
+        """Load configuration from environment variables."""
+        return cls(
+            api_key=os.environ.get("ANTHROPIC_API_KEY"),
+            model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+        )
+
+
 class CloudSyncConfig(BaseModel):
     """Cloud sync settings for AWS state synchronization."""
 
-    enabled: bool = Field(
-        default=False, description="Whether to sync state to AWS"
-    )
+    enabled: bool = Field(default=False, description="Whether to sync state to AWS")
     sync_mode: Literal["immediate", "batch", "manual"] = Field(
         default="immediate",
         description="Sync mode: immediate (after each thread), batch (after run), manual (on demand)",
@@ -95,6 +117,9 @@ class AppConfig(BaseModel):
     notion: Optional[NotionConfig] = Field(
         default=None, description="Notion config (required if provider=notion)"
     )
+    anthropic: Optional[AnthropicConfig] = Field(
+        default=None, description="Anthropic config for LLM-powered reports (--ci flag)"
+    )
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
 
     @field_validator("jira", mode="before")
@@ -119,9 +144,7 @@ class AppConfig(BaseModel):
             return self.jira
         elif self.provider == "notion":
             if not self.notion:
-                raise ValueError(
-                    "Notion configuration required when provider is 'notion'"
-                )
+                raise ValueError("Notion configuration required when provider is 'notion'")
             return self.notion
         else:
             # provider == "none" - reports only mode
@@ -149,6 +172,11 @@ class AppConfig(BaseModel):
                     "email": "user@company.com",
                     "api_token": "xxx",
                     "project_key": "PROJ",
+                },
+                "anthropic": {
+                    "api_key": "sk-ant-xxx",
+                    "model": "claude-sonnet-4-20250514",
+                    "max_tokens": 4096,
                 },
                 "defaults": {
                     "report_dir": "./reports",

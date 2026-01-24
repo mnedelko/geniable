@@ -8,20 +8,21 @@ from typing import Optional
 
 import typer
 
-from cli.config_manager import ConfigManager, DEFAULT_CONFIG_PATH
+from cli.config_manager import DEFAULT_CONFIG_PATH, ConfigManager
 from cli.output_formatter import (
     console,
-    print_success,
-    print_error,
-    print_warning,
-    print_info,
-    print_header,
-    print_config,
-    print_tools,
-    print_threads,
-    print_run_summary,
     create_progress,
+    print_config,
+    print_error,
+    print_header,
+    print_info,
+    print_run_summary,
+    print_success,
+    print_threads,
+    print_tools,
+    print_warning,
 )
+
 
 # Auth middleware - authentication is required for all commands
 def require_auth():
@@ -82,7 +83,9 @@ app.add_typer(analyze_app, name="analyze", help="Thread analysis commands")
 @app.command()
 def init(
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing configuration"),
-    skip_validation: bool = typer.Option(False, "--skip-validation", help="Skip service validation"),
+    skip_validation: bool = typer.Option(
+        False, "--skip-validation", help="Skip service validation"
+    ),
 ):
     """Initialize configuration with interactive wizard.
 
@@ -138,6 +141,7 @@ def init(
         state_file = report_dir / "processing_state.json"
         if not state_file.exists():
             import json
+
             initial_state = {
                 "project": config.get("langsmith", {}).get("project", "default"),
                 "processed_threads": {},
@@ -233,8 +237,12 @@ def configure(
     show: bool = typer.Option(False, "--show", help="Show current configuration"),
     validate: bool = typer.Option(False, "--validate", help="Validate configuration"),
     reset: bool = typer.Option(False, "--reset", help="Reset to template configuration"),
-    sync_secrets: bool = typer.Option(False, "--sync-secrets", help="Sync credentials to AWS Secrets Manager"),
-    list_secrets: bool = typer.Option(False, "--list-secrets", help="List secrets in AWS Secrets Manager"),
+    sync_secrets: bool = typer.Option(
+        False, "--sync-secrets", help="Sync credentials to AWS Secrets Manager"
+    ),
+    list_secrets: bool = typer.Option(
+        False, "--list-secrets", help="List secrets in AWS Secrets Manager"
+    ),
 ):
     """Configure the analyzer with credentials and settings."""
     # Require authentication
@@ -290,7 +298,7 @@ def configure(
                 console.print(f"\n[cyan]Found {len(secrets)} secret(s):[/cyan]")
                 for secret in secrets:
                     console.print(f"  - {secret['name']}")
-                    if secret.get('last_changed'):
+                    if secret.get("last_changed"):
                         console.print(f"    [dim]Last modified: {secret['last_changed']}[/dim]")
 
         except ImportError:
@@ -367,12 +375,14 @@ def configure(
             print_success(f"Configuration valid for provider: {config.provider}")
 
             # Show summary
-            print_config({
-                "provider": config.provider,
-                "langsmith_project": config.langsmith.project,
-                "langsmith_queue": config.langsmith.queue,
-                "aws_region": config.aws.region,
-            })
+            print_config(
+                {
+                    "provider": config.provider,
+                    "langsmith_project": config.langsmith.project,
+                    "langsmith_queue": config.langsmith.queue,
+                    "aws_region": config.aws.region,
+                }
+            )
 
             # Live service validation
             console.print("\n[cyan]Testing service connections...[/cyan]")
@@ -443,8 +453,12 @@ def run(
     dry_run: bool = typer.Option(False, "--dry-run", help="Analyze without creating tickets"),
     report_only: bool = typer.Option(False, "--report-only", help="Generate report only"),
     queue: Optional[str] = typer.Option(None, "--queue", "-q", help="Override annotation queue"),
-    provider: Optional[str] = typer.Option(None, "--provider", "-p", help="Override provider (jira/notion)"),
-    force_reprocess: bool = typer.Option(False, "--force", "-f", help="Reprocess already-processed threads"),
+    provider: Optional[str] = typer.Option(
+        None, "--provider", "-p", help="Override provider (jira/notion)"
+    ),
+    force_reprocess: bool = typer.Option(
+        False, "--force", "-f", help="Reprocess already-processed threads"
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
     """Run the analysis pipeline on annotated threads."""
@@ -571,8 +585,8 @@ def status(
         print_info(f"Queue: {config.langsmith.queue}")
 
         # Test connections
-        from agent.api_clients.integration_client import IntegrationServiceClient
         from agent.api_clients.evaluation_client import EvaluationServiceClient
+        from agent.api_clients.integration_client import IntegrationServiceClient
 
         # Get auth token for API calls
         auth_token = _get_auth_token()
@@ -751,7 +765,9 @@ def version():
 @app.command()
 def login(
     email: Optional[str] = typer.Option(None, "--email", "-e", help="Email address"),
-    no_keyring: bool = typer.Option(False, "--no-keyring", help="Use file storage instead of system keyring"),
+    no_keyring: bool = typer.Option(
+        False, "--no-keyring", help="Use file storage instead of system keyring"
+    ),
 ):
     """Login to Geni cloud service.
 
@@ -762,7 +778,7 @@ def login(
     from getpass import getpass
 
     try:
-        from cli.auth import get_auth_client, AuthenticationError, PasswordChangeRequired
+        from cli.auth import AuthenticationError, PasswordChangeRequired, get_auth_client
     except ImportError as e:
         print_error(f"Authentication module not available: {e}")
         print_info("Ensure all dependencies are installed: pip install -e '.[dev]'")

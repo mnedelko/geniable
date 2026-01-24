@@ -3,20 +3,19 @@
 from typing import Any, Callable, Dict, List, Optional
 
 from rich.console import Console
-from rich.table import Table
+from rich.live import Live
 from rich.panel import Panel
 from rich.progress import (
+    BarColumn,
     Progress,
     SpinnerColumn,
-    TextColumn,
-    BarColumn,
     TaskProgressColumn,
+    TextColumn,
     TimeElapsedColumn,
 )
-from rich.live import Live
 from rich.spinner import Spinner
+from rich.table import Table
 from rich.text import Text
-
 
 console = Console()
 
@@ -55,7 +54,11 @@ class ThreadLoadingProgress:
 
             # Add progress bar
             bar_width = 30
-            filled = int((self._current_thread / self._total_threads) * bar_width) if self._total_threads > 0 else 0
+            filled = (
+                int((self._current_thread / self._total_threads) * bar_width)
+                if self._total_threads > 0
+                else 0
+            )
             empty = bar_width - filled
             bar = "━" * filled + "╺" + "─" * max(0, empty - 1)
 

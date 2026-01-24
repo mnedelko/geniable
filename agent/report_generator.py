@@ -59,6 +59,7 @@ class AnthropicLLMClient:
         if self._client is None:
             try:
                 import anthropic
+
                 self._client = anthropic.Anthropic(api_key=self.api_key)
             except ImportError:
                 raise ImportError(
@@ -84,7 +85,8 @@ class AnthropicLLMClient:
         response = client.messages.create(
             model=self.model,
             max_tokens=2000,
-            system=system_prompt or "You are an expert software engineer analyzing agent execution traces.",
+            system=system_prompt
+            or "You are an expert software engineer analyzing agent execution traces.",
             messages=messages,
         )
 
@@ -98,8 +100,10 @@ class ReportGenerator:
     codebase to provide context-aware recommendations.
 
     The generator can operate in two modes:
-    1. LLM-powered: Uses an AI model to generate observations, successes, and recommendations
-    2. Fallback: Uses deterministic analysis when no LLM is available
+    1. LLM-powered (--ci): Uses an AI model to generate observations, successes, and recommendations
+    2. Deterministic (default): Uses rule-based analysis without LLM
+
+    When use_llm=True (CI mode), the anthropic package must be installed.
     """
 
     def __init__(
@@ -107,7 +111,7 @@ class ReportGenerator:
         output_dir: Path = None,
         project_context: Optional[Dict[str, Any]] = None,
         llm_client: Optional[LLMClient] = None,
-        use_llm: bool = True,
+        use_llm: bool = False,
     ):
         """Initialize the report generator.
 
@@ -115,7 +119,8 @@ class ReportGenerator:
             output_dir: Directory for generated reports
             project_context: Context about the project codebase for recommendations
             llm_client: Optional LLM client for AI-powered generation
-            use_llm: Whether to use LLM for report generation (default True)
+            use_llm: Whether to use LLM for report generation (default False).
+                     When True (--ci flag), requires anthropic package.
         """
         self.output_dir = output_dir or Path("./reports")
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -124,12 +129,27 @@ class ReportGenerator:
 
         # Initialize LLM client if needed
         if use_llm and llm_client is None:
+            # Verify anthropic package is available when CI mode is enabled
             try:
-                self.llm_client = AnthropicLLMClient()
+                import anthropic  # noqa: F401
+            except ImportError:
+                raise ImportError(
+                    "anthropic package is required for LLM-powered reports (--ci flag). "
+                    "Install with: pip install geniable[llm]"
+                )
+
+            # Verify API key is available
+            api_key = os.environ.get("ANTHROPIC_API_KEY")
+            if not api_key:
+                raise ValueError(
+                    "ANTHROPIC_API_KEY environment variable is required for LLM-powered reports. "
+                    "Set the API key or use 'geni analyze-latest --ci' which will prompt for it."
+                )
+
+            try:
+                self.llm_client = AnthropicLLMClient(api_key=api_key)
             except Exception as e:
-                logger.warning(f"Could not initialize LLM client: {e}. Falling back to deterministic mode.")
-                self.llm_client = None
-                self.use_llm = False
+                raise RuntimeError(f"Failed to initialize LLM client: {e}")
         else:
             self.llm_client = llm_client
 
@@ -248,7 +268,7 @@ class ReportGenerator:
                 # Find the end of Processing Summary section
                 summary_start = content.find(processing_summary_marker)
                 # Find the next section (either ## or ---)
-                remaining = content[summary_start + len(processing_summary_marker):]
+                remaining = content[summary_start + len(processing_summary_marker) :]
 
                 # Find next section header
                 next_section_idx = -1
@@ -261,7 +281,9 @@ class ReportGenerator:
                 if next_section_idx != -1:
                     insert_point = summary_start + len(processing_summary_marker) + next_section_idx
                     # Insert the tickets section before the next section
-                    updated_content = content[:insert_point] + tickets_section + content[insert_point:]
+                    updated_content = (
+                        content[:insert_point] + tickets_section + content[insert_point:]
+                    )
                 else:
                     # Append at the end if no next section found
                     updated_content = content + tickets_section
@@ -327,75 +349,83 @@ class ReportGenerator:
         if langsmith_url:
             lines.append(f"- **LangSmith URL**: [{thread_id[:8]}...]({langsmith_url})")
 
-        lines.extend([
-            f"- **Timestamp**: {start_time}",
-            f"- **End Time**: {end_time}",
-            f"- **Duration**: {duration_seconds:.2f} seconds",
-            f"- **Status**: {status}",
-            f"- **Total Tokens**: {total_tokens:,}",
-            f"- **Prompt Tokens**: {prompt_tokens:,}",
-            f"- **Completion Tokens**: {completion_tokens:,}",
-            f"- **Technique**: {technique}",
-            "",
-            "## User Query",
-            "```",
-            user_query,
-            "```",
-            "",
-            "## Conversation Trace",
-            "",
-            steps_section,
-            "",
-            "## Key Observations",
-            "",
-            observations_section,
-            "",
-            "## What Worked Well",
-            "",
-            successes_section,
-            "",
-            "## Recommendations",
-            "",
-            recommendations_section,
-            "",
-            "## Processing Summary",
-            "",
-            f"- **Thread Processed**: {datetime.now().isoformat()}",
-            f"- **Issues Identified**: {issue_counts['total']}",
-            f"- **Critical Issues**: {issue_counts['critical']}",
-            f"- **High Priority Issues**: {issue_counts['high']}",
-            f"- **Medium Priority Issues**: {issue_counts['medium']}",
-            f"- **Low Priority Issues**: {issue_counts['low']}",
-            "",
-        ])
+        lines.extend(
+            [
+                f"- **Timestamp**: {start_time}",
+                f"- **End Time**: {end_time}",
+                f"- **Duration**: {duration_seconds:.2f} seconds",
+                f"- **Status**: {status}",
+                f"- **Total Tokens**: {total_tokens:,}",
+                f"- **Prompt Tokens**: {prompt_tokens:,}",
+                f"- **Completion Tokens**: {completion_tokens:,}",
+                f"- **Technique**: {technique}",
+                "",
+                "## User Query",
+                "```",
+                user_query,
+                "```",
+                "",
+                "## Conversation Trace",
+                "",
+                steps_section,
+                "",
+                "## Key Observations",
+                "",
+                observations_section,
+                "",
+                "## What Worked Well",
+                "",
+                successes_section,
+                "",
+                "## Recommendations",
+                "",
+                recommendations_section,
+                "",
+                "## Processing Summary",
+                "",
+                f"- **Thread Processed**: {datetime.now().isoformat()}",
+                f"- **Issues Identified**: {issue_counts['total']}",
+                f"- **Critical Issues**: {issue_counts['critical']}",
+                f"- **High Priority Issues**: {issue_counts['high']}",
+                f"- **Medium Priority Issues**: {issue_counts['medium']}",
+                f"- **Low Priority Issues**: {issue_counts['low']}",
+                "",
+            ]
+        )
 
         # Add annotation if present
         if thread.get("annotation_text"):
             annotation_score = thread.get("annotation_score", "N/A")
-            lines.extend([
-                "---",
-                "",
-                "## Human Annotation",
-                "",
-                f"**Score**: {annotation_score}",
-                "",
-                f"> {thread['annotation_text']}",
-                "",
-            ])
+            lines.extend(
+                [
+                    "---",
+                    "",
+                    "## Human Annotation",
+                    "",
+                    f"**Score**: {annotation_score}",
+                    "",
+                    f"> {thread['annotation_text']}",
+                    "",
+                ]
+            )
 
         # Add evaluation details
         if eval_result and eval_result.results:
-            lines.extend([
-                "---",
-                "",
-                "## Detailed Evaluation Results",
-                "",
-                "| Evaluation | Status | Score | Details |",
-                "|------------|--------|-------|---------|",
-            ])
+            lines.extend(
+                [
+                    "---",
+                    "",
+                    "## Detailed Evaluation Results",
+                    "",
+                    "| Evaluation | Status | Score | Details |",
+                    "|------------|--------|-------|---------|",
+                ]
+            )
 
             for result in eval_result.results:
-                status_icon = "✅" if result.status == "pass" else "⚠️" if result.status == "warning" else "❌"
+                status_icon = (
+                    "✅" if result.status == "pass" else "⚠️" if result.status == "warning" else "❌"
+                )
                 message = (result.message or "")[:80]
                 lines.append(
                     f"| {result.tool} | {status_icon} {result.status} | {result.score:.2f} | {message} |"
@@ -429,7 +459,9 @@ class ReportGenerator:
 
             # Format step header with timing
             lines.append(f"### Step {i}: {step_name}")
-            lines.append(f"**Type**: {step_type} | **Duration**: {duration_ms}ms | **Tokens**: {tokens:,}")
+            lines.append(
+                f"**Type**: {step_type} | **Duration**: {duration_ms}ms | **Tokens**: {tokens:,}"
+            )
             lines.append("")
 
             # Input if available
@@ -516,7 +548,7 @@ Output ONLY the bullet points, no preamble or summary."""
         try:
             response = self.llm_client.generate(
                 prompt,
-                system_prompt="You are an expert AI/ML engineer analyzing agent execution traces. Provide concise, actionable observations."
+                system_prompt="You are an expert AI/ML engineer analyzing agent execution traces. Provide concise, actionable observations.",
             )
             return response.strip()
         except Exception as e:
@@ -532,7 +564,9 @@ Output ONLY the bullet points, no preamble or summary."""
         # Performance observations
         duration = thread.get("duration_seconds", 0)
         if duration > 30:
-            observations.append(f"⚠️ **High Latency**: Thread execution took {duration:.1f}s, which exceeds the 30s threshold")
+            observations.append(
+                f"⚠️ **High Latency**: Thread execution took {duration:.1f}s, which exceeds the 30s threshold"
+            )
         elif duration > 10:
             observations.append(f"⏱️ **Moderate Latency**: Thread execution took {duration:.1f}s")
         else:
@@ -541,14 +575,18 @@ Output ONLY the bullet points, no preamble or summary."""
         # Token observations
         total_tokens = thread.get("total_tokens", 0)
         if total_tokens > 50000:
-            observations.append(f"⚠️ **High Token Usage**: {total_tokens:,} tokens consumed (exceeds 50K limit)")
+            observations.append(
+                f"⚠️ **High Token Usage**: {total_tokens:,} tokens consumed (exceeds 50K limit)"
+            )
         elif total_tokens > 25000:
             observations.append(f"📊 **Moderate Token Usage**: {total_tokens:,} tokens consumed")
 
         # Error observations
         errors = thread.get("errors", [])
         if errors:
-            observations.append(f"❌ **Errors Detected**: {len(errors)} error(s) occurred during execution")
+            observations.append(
+                f"❌ **Errors Detected**: {len(errors)} error(s) occurred during execution"
+            )
             for error in errors[:3]:
                 observations.append(f"  - `{str(error)[:100]}`")
 
@@ -558,12 +596,18 @@ Output ONLY the bullet points, no preamble or summary."""
             warnings = [r for r in eval_result.results if r.status == "warning"]
 
             if failed:
-                observations.append(f"❌ **Failed Evaluations**: {len(failed)} evaluation(s) failed")
+                observations.append(
+                    f"❌ **Failed Evaluations**: {len(failed)} evaluation(s) failed"
+                )
                 for f in failed[:3]:
-                    observations.append(f"  - {f.tool}: {f.message[:80] if f.message else 'No details'}")
+                    observations.append(
+                        f"  - {f.tool}: {f.message[:80] if f.message else 'No details'}"
+                    )
 
             if warnings:
-                observations.append(f"⚠️ **Warnings**: {len(warnings)} evaluation(s) produced warnings")
+                observations.append(
+                    f"⚠️ **Warnings**: {len(warnings)} evaluation(s) produced warnings"
+                )
 
         # Step analysis
         steps = thread.get("steps", [])
@@ -573,7 +617,9 @@ Output ONLY the bullet points, no preamble or summary."""
                 observations.append("🐢 **Slow Steps Identified**:")
                 for step in slowest_steps:
                     if step.get("duration_ms", 0) > 1000:
-                        observations.append(f"  - {step.get('name', 'Unknown')}: {step.get('duration_ms', 0)}ms")
+                        observations.append(
+                            f"  - {step.get('name', 'Unknown')}: {step.get('duration_ms', 0)}ms"
+                        )
 
         if not observations:
             observations.append("_No significant observations._")
@@ -630,7 +676,7 @@ Output ONLY the bullet points, no preamble or summary."""
         try:
             response = self.llm_client.generate(
                 prompt,
-                system_prompt="You are an expert AI/ML engineer analyzing agent execution traces. Focus on identifying positive patterns and successes."
+                system_prompt="You are an expert AI/ML engineer analyzing agent execution traces. Focus on identifying positive patterns and successes.",
             )
             return response.strip()
         except Exception as e:
@@ -678,15 +724,21 @@ Output ONLY the bullet points, no preamble or summary."""
         if steps:
             successful_steps = [s for s in steps if not s.get("error")]
             if len(successful_steps) == len(steps) and len(steps) > 0:
-                successes.append(f"✅ **All Steps Succeeded**: {len(steps)} steps completed without errors")
+                successes.append(
+                    f"✅ **All Steps Succeeded**: {len(steps)} steps completed without errors"
+                )
 
             # Fast steps
             fast_steps = [s for s in steps if s.get("duration_ms", float("inf")) < 500]
             if fast_steps and len(fast_steps) >= len(steps) // 2:
-                successes.append(f"⚡ **Efficient Step Execution**: {len(fast_steps)}/{len(steps)} steps completed in <500ms")
+                successes.append(
+                    f"⚡ **Efficient Step Execution**: {len(fast_steps)}/{len(steps)} steps completed in <500ms"
+                )
 
         if not successes:
-            successes.append("_Analysis in progress - successes will be identified as patterns emerge._")
+            successes.append(
+                "_Analysis in progress - successes will be identified as patterns emerge._"
+            )
 
         return "\n".join(f"- {s}" for s in successes)
 
@@ -764,7 +816,7 @@ Format as:
                 system_prompt="""You are a senior software engineer and AI/ML expert reviewing agent execution traces.
 Your goal is to provide specific, actionable recommendations that will meaningfully improve the agent's performance,
 reliability, and user experience. Base your recommendations on the actual data in the thread, not generic advice.
-When you have project context, leverage your understanding of the codebase to make targeted suggestions."""
+When you have project context, leverage your understanding of the codebase to make targeted suggestions.""",
             )
             return response.strip()
         except Exception as e:
@@ -792,65 +844,79 @@ When you have project context, leverage your understanding of the codebase to ma
         # Performance-based recommendations
         duration = thread.get("duration_seconds", 0)
         if duration > 30:
-            recommendations.append({
-                "priority": "🔴 Critical",
-                "title": "Reduce Thread Execution Time",
-                "description": f"Thread took {duration:.1f}s, significantly impacting user experience.",
-                "actions": [
-                    "Profile slow steps to identify bottlenecks",
-                    "Consider implementing caching for repeated operations",
-                    "Review database queries for N+1 patterns",
-                    "Evaluate if parallel execution is possible for independent steps",
-                ],
-                "affected_code": self._identify_slow_code_areas(thread),
-            })
+            recommendations.append(
+                {
+                    "priority": "🔴 Critical",
+                    "title": "Reduce Thread Execution Time",
+                    "description": f"Thread took {duration:.1f}s, significantly impacting user experience.",
+                    "actions": [
+                        "Profile slow steps to identify bottlenecks",
+                        "Consider implementing caching for repeated operations",
+                        "Review database queries for N+1 patterns",
+                        "Evaluate if parallel execution is possible for independent steps",
+                    ],
+                    "affected_code": self._identify_slow_code_areas(thread),
+                }
+            )
 
         # Token-based recommendations
         total_tokens = thread.get("total_tokens", 0)
         if total_tokens > 50000:
-            recommendations.append({
-                "priority": "🟠 High",
-                "title": "Optimize Token Consumption",
-                "description": f"Thread consumed {total_tokens:,} tokens, exceeding the 50K limit.",
-                "actions": [
-                    "Review prompt templates for unnecessary verbosity",
-                    "Implement context window management",
-                    "Consider summarization for long conversation histories",
-                    "Use more concise system prompts",
-                ],
-                "affected_code": self._identify_token_heavy_areas(thread),
-            })
+            recommendations.append(
+                {
+                    "priority": "🟠 High",
+                    "title": "Optimize Token Consumption",
+                    "description": f"Thread consumed {total_tokens:,} tokens, exceeding the 50K limit.",
+                    "actions": [
+                        "Review prompt templates for unnecessary verbosity",
+                        "Implement context window management",
+                        "Consider summarization for long conversation histories",
+                        "Use more concise system prompts",
+                    ],
+                    "affected_code": self._identify_token_heavy_areas(thread),
+                }
+            )
 
         # Error-based recommendations
         errors = thread.get("errors", [])
         if errors:
             error_types = self._categorize_errors(errors)
             for error_type, error_list in error_types.items():
-                recommendations.append({
-                    "priority": "🔴 Critical" if "exception" in error_type.lower() else "🟠 High",
-                    "title": f"Address {error_type} Errors",
-                    "description": f"{len(error_list)} {error_type} error(s) detected.",
-                    "actions": self._get_error_remediation_actions(error_type),
-                    "affected_code": self._identify_error_source(errors),
-                })
+                recommendations.append(
+                    {
+                        "priority": (
+                            "🔴 Critical" if "exception" in error_type.lower() else "🟠 High"
+                        ),
+                        "title": f"Address {error_type} Errors",
+                        "description": f"{len(error_list)} {error_type} error(s) detected.",
+                        "actions": self._get_error_remediation_actions(error_type),
+                        "affected_code": self._identify_error_source(errors),
+                    }
+                )
 
         # Step-specific recommendations
         steps = thread.get("steps", [])
         slow_steps = [s for s in steps if s.get("duration_ms", 0) > 5000]
         if slow_steps:
             step_names = [s.get("name", "Unknown") for s in slow_steps[:3]]
-            recommendations.append({
-                "priority": "🟡 Medium",
-                "title": "Optimize Slow Steps",
-                "description": f"Steps taking >5s: {', '.join(step_names)}",
-                "actions": [
-                    f"Review implementation of '{step_names[0]}' step" if step_names else "Review slow steps",
-                    "Add performance monitoring/tracing",
-                    "Consider async execution where applicable",
-                    "Evaluate caching strategies for repeated computations",
-                ],
-                "affected_code": None,
-            })
+            recommendations.append(
+                {
+                    "priority": "🟡 Medium",
+                    "title": "Optimize Slow Steps",
+                    "description": f"Steps taking >5s: {', '.join(step_names)}",
+                    "actions": [
+                        (
+                            f"Review implementation of '{step_names[0]}' step"
+                            if step_names
+                            else "Review slow steps"
+                        ),
+                        "Add performance monitoring/tracing",
+                        "Consider async execution where applicable",
+                        "Evaluate caching strategies for repeated computations",
+                    ],
+                    "affected_code": None,
+                }
+            )
 
         # Format recommendations
         if not recommendations:
@@ -948,9 +1014,13 @@ When you have project context, leverage your understanding of the codebase to ma
         if eval_result and eval_result.results:
             summary_parts.append("**Evaluation Results**:")
             for result in eval_result.results:
-                status_icon = "✅" if result.status == "pass" else "⚠️" if result.status == "warning" else "❌"
+                status_icon = (
+                    "✅" if result.status == "pass" else "⚠️" if result.status == "warning" else "❌"
+                )
                 message = f" - {result.message[:80]}" if result.message else ""
-                summary_parts.append(f"  {status_icon} {result.tool}: {result.status} (score: {result.score:.2f}){message}")
+                summary_parts.append(
+                    f"  {status_icon} {result.tool}: {result.status} (score: {result.score:.2f}){message}"
+                )
             summary_parts.append("")
 
         return "\n".join(summary_parts)
@@ -1036,7 +1106,9 @@ When you have project context, leverage your understanding of the codebase to ma
         return {
             "priority": "🟡 Medium",
             "title": f"Address {result.tool} Warning",
-            "description": result.message[:200] if result.message else f"Warning from {result.tool}",
+            "description": (
+                result.message[:200] if result.message else f"Warning from {result.tool}"
+            ),
             "actions": [
                 "Review the warning details and assess impact",
                 "Monitor for recurring patterns",
@@ -1202,11 +1274,14 @@ When you have project context, leverage your understanding of the codebase to ma
             ],
         }
 
-        return actions_map.get(error_type, [
-            "Review error logs for detailed information",
-            "Add monitoring and alerting for this error type",
-            "Implement proper error handling",
-        ])
+        return actions_map.get(
+            error_type,
+            [
+                "Review error logs for detailed information",
+                "Add monitoring and alerting for this error type",
+                "Implement proper error handling",
+            ],
+        )
 
     def _identify_error_source(self, errors: List[Any]) -> Optional[str]:
         """Attempt to identify the source of errors.
@@ -1301,13 +1376,15 @@ When you have project context, leverage your understanding of the codebase to ma
                 if result.status in ("warning", "fail"):
                     total_issues += 1
 
-        lines.extend([
-            f"- **Total Issues Found:** {total_issues}",
-            f"- **Passed Evaluations:** {by_status.get('pass', 0)}",
-            f"- **Warnings:** {by_status.get('warning', 0)}",
-            f"- **Failures:** {by_status.get('fail', 0)}",
-            "",
-        ])
+        lines.extend(
+            [
+                f"- **Total Issues Found:** {total_issues}",
+                f"- **Passed Evaluations:** {by_status.get('pass', 0)}",
+                f"- **Warnings:** {by_status.get('warning', 0)}",
+                f"- **Failures:** {by_status.get('fail', 0)}",
+                "",
+            ]
+        )
 
         # Issues by category
         if total_issues > 0:
@@ -1352,42 +1429,52 @@ When you have project context, leverage your understanding of the codebase to ma
         if thread.get("langsmith_url"):
             lines.append(f"**LangSmith:** [{thread_id[:8]}...]({thread['langsmith_url']})")
 
-        lines.extend([
-            f"**Duration:** {thread.get('duration_seconds', 0):.2f}s",
-            f"**Tokens:** {thread.get('total_tokens', 0):,}",
-            f"**Status:** {thread.get('status', 'unknown')}",
-            "",
-        ])
+        lines.extend(
+            [
+                f"**Duration:** {thread.get('duration_seconds', 0):.2f}s",
+                f"**Tokens:** {thread.get('total_tokens', 0):,}",
+                f"**Status:** {thread.get('status', 'unknown')}",
+                "",
+            ]
+        )
 
         # User query
         if thread.get("user_query"):
-            lines.extend([
-                "### User Query",
-                "",
-                f"> {thread['user_query'][:500]}",
-                "",
-            ])
+            lines.extend(
+                [
+                    "### User Query",
+                    "",
+                    f"> {thread['user_query'][:500]}",
+                    "",
+                ]
+            )
 
         # Annotation
         if thread.get("annotation_text"):
-            lines.extend([
-                "### Annotation",
-                "",
-                f"> {thread['annotation_text'][:500]}",
-                "",
-            ])
+            lines.extend(
+                [
+                    "### Annotation",
+                    "",
+                    f"> {thread['annotation_text'][:500]}",
+                    "",
+                ]
+            )
 
         # Evaluation results
         if eval_result and eval_result.results:
-            lines.extend([
-                "### Evaluation Results",
-                "",
-                "| Tool | Status | Score | Message |",
-                "|------|--------|-------|---------|",
-            ])
+            lines.extend(
+                [
+                    "### Evaluation Results",
+                    "",
+                    "| Tool | Status | Score | Message |",
+                    "|------|--------|-------|---------|",
+                ]
+            )
 
             for result in eval_result.results:
-                status_icon = "✅" if result.status == "pass" else "⚠️" if result.status == "warning" else "❌"
+                status_icon = (
+                    "✅" if result.status == "pass" else "⚠️" if result.status == "warning" else "❌"
+                )
                 message = (result.message or "")[:50]
                 lines.append(
                     f"| {result.tool} | {status_icon} {result.status} | {result.score:.2f} | {message} |"
@@ -1397,10 +1484,12 @@ When you have project context, leverage your understanding of the codebase to ma
 
         # Errors
         if thread.get("errors"):
-            lines.extend([
-                "### Errors",
-                "",
-            ])
+            lines.extend(
+                [
+                    "### Errors",
+                    "",
+                ]
+            )
             for error in thread["errors"][:5]:
                 lines.append(f"- `{error[:100]}`")
             lines.append("")
