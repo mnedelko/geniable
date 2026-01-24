@@ -1,0 +1,248 @@
+"""Client for the AWS Integration Service."""
+
+import logging
+from typing import Any, Callable, Dict, List, Optional
+
+import requests
+
+logger = logging.getLogger(__name__)
+
+# Type for progress callback: (phase, current, total, thread_id)
+ProgressCallback = Callable[[str, int, int, str], None]
+
+
+class ThreadData:
+    """Thread data from the Integration Service."""
+
+    def __init__(self, data: Dict[str, Any]):
+        self._data = data
+
+    @property
+    def thread_id(self) -> str:
+        return self._data.get("thread_id", "")
+
+    @property
+    def name(self) -> str:
+        return self._data.get("name", "")
+
+    @property
+    def status(self) -> str:
+        return self._data.get("status", "unknown")
+
+    @property
+    def duration_seconds(self) -> float:
+        return self._data.get("duration_seconds", 0.0)
+
+    @property
+    def total_tokens(self) -> int:
+        return self._data.get("total_tokens", 0)
+
+    @property
+    def user_query(self) -> str:
+        return self._data.get("user_query", "")
+
+    @property
+    def final_response(self) -> Optional[str]:
+        return self._data.get("final_response")
+
+    @property
+    def annotation_text(self) -> Optional[str]:
+        return self._data.get("annotation_text")
+
+    @property
+    def errors(self) -> List[str]:
+        return self._data.get("errors", [])
+
+    @property
+    def langsmith_url(self) -> Optional[str]:
+        return self._data.get("langsmith_url")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self._data
+
+
+class IntegrationServiceClient:
+    """Client for interacting with the AWS Integration Service.
+
+    Provides access to:
+    - Annotated threads from LangSmith
+    - Ticket creation in Jira/Notion
+    """
+
+    def __init__(
+        self,
+        endpoint: str,
+        api_key: Optional[str] = None,
+        auth_token: Optional[str] = None,
+        timeout: int = 30,
+    ):
+        """Initialize the client.
+
+        Args:
+            endpoint: Base URL of the Integration Service
+            api_key: Optional API Gateway key (legacy)
+            auth_token: Optional Cognito auth token (Bearer token)
+            timeout: Request timeout in seconds
+        """
+        self.endpoint = endpoint.rstrip("/")
+        self.timeout = timeout
+
+        self._session = requests.Session()
+        if api_key:
+            self._session.headers["X-Api-Key"] = api_key
+        if auth_token:
+            self._session.headers["Authorization"] = f"Bearer {auth_token}"
+        self._session.headers["Content-Type"] = "application/json"
+
+    def get_thread_details(self, thread_id: str) -> ThreadData:
+        """Fetch full details for a single thread.
+
+        Args:
+            thread_id: The thread ID to fetch details for
+
+        Returns:
+            Thread data with full details
+        """
+        try:
+            response = self._session.get(
+                f"{self.endpoint}/threads/{thread_id}/details",
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            return ThreadData(data)
+
+        except Exception as e:
+            logger.error(f"Failed to fetch thread details for {thread_id}: {e}")
+            raise
+
+    def get_annotated_threads(
+        self,
+        limit: int = 50,
+        with_details: bool = True,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> List[ThreadData]:
+        """Fetch annotated threads from LangSmith.
+
+        Uses a two-step approach to avoid timeouts:
+        1. Fetch summaries only (fast)
+        2. Fetch details for each thread individually
+
+        Args:
+            limit: Maximum threads to return
+            with_details: Whether to include full thread details
+            progress_callback: Optional callback for progress updates
+                               Called with (phase, current, total, thread_id)
+
+        Returns:
+            List of thread data objects
+        """
+        try:
+            # Step 1: Fetch summaries only (fast, never times out)
+            logger.info(f"Fetching thread summaries (limit={limit})")
+            if progress_callback:
+                progress_callback("summaries", 0, 0, "")
+
+            params = {
+                "limit": limit,
+                "with_details": "false",  # Always get summaries first
+            }
+
+            response = self._session.get(
+                f"{self.endpoint}/threads/annotated",
+                params=params,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            threads_data = data.get("threads", [])
+            logger.info(f"Found {len(threads_data)} unprocessed threads")
+
+            if not threads_data:
+                if progress_callback:
+                    progress_callback("complete", 0, 0, "")
+                return []
+
+            # Step 2: If details requested, fetch each thread's details individually
+            if with_details:
+                logger.info(f"Fetching details for {len(threads_data)} threads one-by-one")
+                if progress_callback:
+                    progress_callback("details", 0, len(threads_data), "")
+
+                detailed_threads = []
+                for i, thread_summary in enumerate(threads_data):
+                    thread_id = thread_summary.get("thread_id")
+                    if thread_id:
+                        if progress_callback:
+                            progress_callback("details", i + 1, len(threads_data), thread_id)
+                        try:
+                            logger.info(f"Fetching details {i + 1}/{len(threads_data)}: {thread_id}")
+                            thread_details = self.get_thread_details(thread_id)
+                            detailed_threads.append(thread_details)
+                        except Exception as e:
+                            logger.warning(f"Failed to get details for thread {thread_id}: {e}")
+                            # Fall back to summary data
+                            detailed_threads.append(ThreadData(thread_summary))
+
+                if progress_callback:
+                    progress_callback("complete", len(threads_data), len(threads_data), "")
+                return detailed_threads
+            else:
+                if progress_callback:
+                    progress_callback("complete", len(threads_data), len(threads_data), "")
+                return [ThreadData(t) for t in threads_data]
+
+        except Exception as e:
+            logger.error(f"Failed to fetch threads: {e}")
+            raise
+
+    def create_ticket(
+        self,
+        provider: str,
+        issue_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Create a ticket in the target system.
+
+        Args:
+            provider: Provider name ('jira' or 'notion')
+            issue_data: Issue data matching the IssueRequest schema
+
+        Returns:
+            Ticket creation response
+        """
+        try:
+            request_data = {
+                "provider": provider,
+                "issue": issue_data,
+            }
+
+            response = self._session.post(
+                f"{self.endpoint}/integrations/ticket",
+                json=request_data,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+
+            return response.json()
+
+        except Exception as e:
+            logger.error(f"Failed to create ticket: {e}")
+            raise
+
+    def validate_connection(self) -> bool:
+        """Validate connection to the Integration Service.
+
+        Returns:
+            True if connection is valid
+        """
+        try:
+            response = self._session.get(
+                f"{self.endpoint}/threads/annotated",
+                params={"limit": 1, "with_details": "false"},
+                timeout=10,
+            )
+            return response.status_code == 200
+        except Exception:
+            return False

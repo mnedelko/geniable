@@ -1,0 +1,237 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geniable"
+version = "2.0.0"
+description = "Hybrid Local-Cloud QA Pipeline for LangSmith Thread Analysis"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    {name = "Mike Nedelko", email = "mnedelko@users.noreply.github.com"}
+]
+keywords = [
+    "langsmith",
+    "llm",
+    "qa",
+    "testing",
+    "analysis",
+    "mcp",
+    "jira",
+    "notion"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    # Core
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0.0",
+
+    # CLI
+    "typer[all]>=0.9.0",
+    "rich>=13.0.0",
+    "questionary>=2.0.0",
+
+    # HTTP Client
+    "requests>=2.31.0",
+    "httpx>=0.25.0",
+
+    # LangSmith Integration
+    "langsmith>=0.1.0",
+
+    # AWS SDK (for local agent API calls)
+    "boto3>=1.34.0",
+]
+
+[project.optional-dependencies]
+# Development dependencies
+dev = [
+    # Testing
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-mock>=3.0.0",
+    "pytest-asyncio>=0.21.0",
+    "moto[dynamodb]>=5.0.0",
+    "responses>=0.23.0",
+
+    # Type checking
+    "mypy>=1.0.0",
+    "boto3-stubs[dynamodb]>=1.34.0",
+    "types-requests>=2.31.0",
+    "types-PyYAML>=6.0.0",
+
+    # Formatting & Linting
+    "black>=24.0.0",
+    "isort>=5.0.0",
+    "ruff>=0.1.0",
+
+    # Pre-commit hooks
+    "pre-commit>=3.0.0",
+]
+
+[project.scripts]
+geni = "cli.main:main"
+
+[project.urls]
+Homepage = "https://github.com/mnedelko/geniable"
+Documentation = "https://github.com/mnedelko/geniable#readme"
+Repository = "https://github.com/mnedelko/geniable"
+Issues = "https://github.com/mnedelko/geniable/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cli*", "agent*", "shared*"]
+exclude = ["tests*", "docs*"]
+
+[tool.setuptools.package-data]
+"*" = ["py.typed"]
+
+# =============================================================================
+# Black Configuration
+# =============================================================================
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+    \.aws-sam
+    | \.git
+    | \.mypy_cache
+    | \.pytest_cache
+    | \.venv
+    | venv
+    | build
+    | dist
+    | __pycache__
+)/
+'''
+
+# =============================================================================
+# isort Configuration
+# =============================================================================
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["cli", "agent", "shared"]
+skip = [".aws-sam", ".git", ".mypy_cache", ".pytest_cache", ".venv", "venv"]
+
+# =============================================================================
+# Ruff Configuration
+# =============================================================================
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "ARG", # flake8-unused-arguments
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+    "ARG001", # unused function argument
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/*" = ["ARG001"]
+
+# =============================================================================
+# MyPy Configuration
+# =============================================================================
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+namespace_packages = true
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = [
+    "langsmith.*",
+    "notion_client.*",
+    "boto3.*",
+    "botocore.*",
+    "moto.*",
+]
+ignore_missing_imports = true
+
+# =============================================================================
+# Pytest Configuration
+# =============================================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--cov=cli",
+    "--cov=agent",
+    "--cov=shared",
+    "--cov-report=term-missing",
+    "--cov-report=html:reports/coverage",
+    "--cov-fail-under=70",
+]
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+    "slow: Slow running tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+# =============================================================================
+# Coverage Configuration
+# =============================================================================
+[tool.coverage.run]
+source = ["cli", "agent", "shared"]
+branch = true
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/conftest.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "@abstractmethod",
+]
+show_missing = true
