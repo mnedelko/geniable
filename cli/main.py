@@ -975,22 +975,32 @@ def analyze_latest_alias(
     limit: int = typer.Option(50, "--limit", "-l", help="Maximum threads to analyze"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Analyze without creating tickets"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    ci: bool = typer.Option(
+        False,
+        "--ci",
+        help="Enable LLM-powered reports using Anthropic API (for CI/CD pipelines)",
+    ),
 ):
     """Analyze latest annotated threads (alias for 'analyze latest')."""
     from cli.commands.analyze import analyze_latest
 
-    analyze_latest(limit=limit, dry_run=dry_run, verbose=verbose)
+    analyze_latest(limit=limit, dry_run=dry_run, verbose=verbose, ci=ci)
 
 
 @app.command("analyze-specific")
 def analyze_specific_alias(
     count: int = typer.Option(10, "--count", "-c", help="Number of recent threads to show"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    ci: bool = typer.Option(
+        False,
+        "--ci",
+        help="Enable LLM-powered reports using Anthropic API (for CI/CD pipelines)",
+    ),
 ):
     """Select and analyze a specific thread (alias for 'analyze specific')."""
     from cli.commands.analyze import analyze_specific
 
-    analyze_specific(count=count, verbose=verbose)
+    analyze_specific(count=count, verbose=verbose, ci=ci)
 
 
 def main():
