@@ -8,7 +8,7 @@ ifneq (,$(wildcard ./.env))
     export
 endif
 
-.PHONY: help install install-dev lint format typecheck test test-unit test-integration build deploy-dev deploy-staging deploy-prod local-api clean
+.PHONY: help install install-dev lint format typecheck test test-unit test-integration build deploy-dev deploy-staging deploy-prod local-api clean package publish publish-test
 
 # Python environment
 PYTHON := python3
@@ -43,13 +43,18 @@ help:
 	@echo "  test-integration Run integration tests"
 	@echo "  test-cov         Run tests with coverage report"
 	@echo ""
-	@echo "Build & Deploy:"
+	@echo "Build & Deploy (Cloud):"
 	@echo "  build            Build SAM application"
 	@echo "  validate         Validate SAM template"
 	@echo "  deploy-dev       Deploy to dev environment"
 	@echo "  deploy-staging   Deploy to staging environment"
 	@echo "  deploy-prod      Deploy to production environment"
 	@echo "  local-api        Start local API for testing"
+	@echo ""
+	@echo "Build & Deploy (PyPI):"
+	@echo "  package          Build Python package for PyPI"
+	@echo "  publish-test     Publish to TestPyPI"
+	@echo "  publish          Publish to PyPI (production)"
 	@echo ""
 	@echo "CLI:"
 	@echo "  cli-configure    Show CLI configuration"
@@ -163,6 +168,22 @@ deploy-prod: validate build
 
 local-api: build
 	cd $(SAM_DIR) && $(SAM) local start-api --warm-containers EAGER
+
+# =============================================================================
+# PyPI Package
+# =============================================================================
+package: clean
+	$(PYTHON) -m pip install --upgrade build
+	$(PYTHON) -m build
+
+publish-test: package
+	$(PYTHON) -m pip install --upgrade twine
+	$(PYTHON) -m twine upload --repository testpypi dist/*
+
+publish: package
+	@echo "Publishing to PyPI (production). Are you sure? [y/N]" && read ans && [ $${ans:-N} = y ]
+	$(PYTHON) -m pip install --upgrade twine
+	$(PYTHON) -m twine upload dist/*
 
 # =============================================================================
 # CLI Commands

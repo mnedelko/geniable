@@ -63,9 +63,43 @@ class ConfigWizard:
         Checks for CLAUDE.md and guides user through /init setup if needed.
         This enables the /agent workflow in Claude Code to work effectively
         with the Geniable project.
+
+        Also installs Geniable skills to ~/.claude/commands/ for the
+        /analyze-latest slash command.
         """
         setup = ClaudeCodeSetup(project_root=Path.cwd())
         setup.run_setup_check()
+
+        # Install Geniable skills
+        self._install_skills()
+
+    def _install_skills(self) -> None:
+        """Install Geniable Claude Code skills to user's commands directory."""
+        from cli.skills import install_skills
+
+        console.print("\n[dim]Installing Geniable skills to ~/.claude/commands/...[/dim]")
+
+        try:
+            results = install_skills(force=True)
+
+            installed = [name for name, success in results.items() if success]
+            failed = [name for name, success in results.items() if not success]
+
+            if installed:
+                console.print(f"[green]✓[/green] Installed {len(installed)} skill(s):")
+                for skill in installed:
+                    console.print(f"  - {skill}")
+
+            if failed:
+                console.print(f"[yellow]![/yellow] Failed to install {len(failed)} skill(s):")
+                for skill in failed:
+                    console.print(f"  - {skill}")
+
+            console.print("[dim]Skills available: /analyze-latest[/dim]")
+
+        except Exception as e:
+            console.print(f"[yellow]![/yellow] Failed to install skills: {e}")
+            console.print("[dim]You can install manually later.[/dim]")
 
     def run(self, skip_validation: bool = False) -> Dict[str, Any]:
         """Run the complete wizard flow.

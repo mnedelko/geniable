@@ -79,6 +79,11 @@ from cli.commands.analyze import app as analyze_app
 
 app.add_typer(analyze_app, name="analyze", help="Thread analysis commands")
 
+# Add ticket subcommands
+from cli.commands.ticket import app as ticket_app
+
+app.add_typer(ticket_app, name="ticket", help="Ticket management commands")
+
 
 @app.command()
 def init(

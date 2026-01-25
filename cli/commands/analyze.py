@@ -1,7 +1,12 @@
 """Analysis commands for thread processing."""
 
+import json
 import logging
 import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -22,6 +27,138 @@ from cli.output_formatter import (
 
 console = Console()
 app = typer.Typer(help="Thread analysis commands")
+
+
+def _is_inside_claude_code() -> bool:
+    """Check if we're running inside an active Claude Code session."""
+    return os.environ.get("CLAUDECODE") == "1"
+
+
+def _output_for_claude_code(threads_json: str, config_dict: dict) -> None:
+    """Output thread data for the current Claude Code session to analyze.
+
+    When running inside Claude Code, we simply print the data and instructions.
+    Claude (the AI) will see this output and can analyze it directly.
+    """
+    console.print()
+    console.print("[bold cyan]═══ Thread Analysis Request ═══[/bold cyan]")
+    console.print()
+    console.print("I've fetched the following threads from LangSmith for analysis:")
+    console.print()
+    console.print("[dim]```json[/dim]")
+    print(threads_json)
+    console.print("[dim]```[/dim]")
+    console.print()
+    console.print("[bold]Please analyze these threads for:[/bold]")
+    console.print("  1. Performance issues (slow execution, high latency)")
+    console.print("  2. Errors and failures")
+    console.print("  3. Quality issues (poor responses, hallucinations)")
+    console.print("  4. Token efficiency problems")
+    console.print()
+    console.print(f"[dim]Provider: {config_dict.get('provider', 'jira')}[/dim]")
+    console.print(f"[dim]Project: {config_dict.get('project', 'default')}[/dim]")
+    console.print()
+    console.print("After analysis, I can help create tickets for any issues found.")
+    console.print()
+    console.print("[bold cyan]═══════════════════════════════[/bold cyan]")
+    console.print()
+
+
+def _spawn_claude_code(threads_json: str, config_dict: dict, verbose: bool = False) -> int:
+    """Spawn Claude Code CLI to analyze threads.
+
+    If already inside Claude Code, just output the data.
+    Otherwise, spawn a new claude process.
+
+    Args:
+        threads_json: JSON string of thread data
+        config_dict: Configuration for ticket creation
+        verbose: Whether to show verbose output
+
+    Returns:
+        Exit code (0 for success)
+    """
+    # If we're already inside Claude Code, just output the data
+    if _is_inside_claude_code():
+        _output_for_claude_code(threads_json, config_dict)
+        return 0
+
+    # Not inside Claude Code - check if CLI is available
+    claude_path = shutil.which("claude")
+    if not claude_path:
+        print_error("Claude Code CLI not found")
+        print_info("Option 1: Run 'geni analyze-latest' from within Claude Code")
+        print_info("Option 2: Install Claude Code: npm install -g @anthropic-ai/claude-code")
+        print_info("Option 3: Use --ci flag for automated analysis with Anthropic API")
+        raise typer.Exit(1)
+
+    # Build the analysis prompt
+    prompt = f"""You are analyzing LangSmith conversation threads for quality issues.
+
+## Thread Data
+
+```json
+{threads_json}
+```
+
+## Your Task
+
+Analyze each thread and identify:
+1. **Performance Issues**: Slow execution, high latency, inefficient token usage
+2. **Errors**: Failures, exceptions, timeouts
+3. **Quality Issues**: Poor responses, incomplete answers, hallucinations
+4. **Token Efficiency**: Excessive token usage, poor prompt/completion ratios
+
+## Configuration
+
+- Provider: {config_dict.get('provider', 'jira')}
+- Project: {config_dict.get('project', 'default')}
+- Report Directory: {config_dict.get('report_dir', './reports')}
+
+## Output Format
+
+For each thread with issues, provide:
+1. A summary of the issue
+2. Severity (critical/high/medium/low)
+3. Specific recommendations for improvement
+4. Evidence from the thread data
+
+After analysis, ask if I want to create tickets for any identified issues.
+
+Begin your analysis now."""
+
+    # Run claude with the prompt
+    print_info("Launching Claude Code for analysis...")
+    console.print("[dim]You can interact with Claude Code directly.[/dim]")
+    console.print()
+
+    try:
+        # Use --permission-mode to allow file writes for reports
+        cmd = [
+            claude_path,
+            "--permission-mode", "default",
+            "-p", prompt,
+        ]
+
+        if verbose:
+            console.print(f"[dim]Running: {' '.join(cmd[:3])}...[/dim]")
+
+        # Run interactively - inherit stdio so user can interact
+        result = subprocess.run(
+            cmd,
+            stdin=sys.stdin,
+            stdout=sys.stdout,
+            stderr=sys.stderr,
+        )
+
+        return result.returncode
+
+    except KeyboardInterrupt:
+        print_warning("\nAnalysis interrupted")
+        return 130
+    except Exception as e:
+        print_error(f"Failed to run Claude Code: {e}")
+        return 1
 
 
 def _get_anthropic_api_key(config_manager: ConfigManager) -> Optional[str]:
@@ -172,18 +309,18 @@ def analyze_latest(
     ci: bool = typer.Option(
         False,
         "--ci",
-        help="Enable LLM-powered reports using Anthropic API (requires API key)",
+        help="CI/CD mode: Use Anthropic API directly (requires API key)",
     ),
 ):
     """Analyze latest annotated threads from LangSmith queue.
 
-    Fetches new threads since the last poll and runs evaluation pipeline.
+    Default mode: Spawns Claude Code CLI for interactive analysis.
+    You'll see Claude working in real-time and can interact with it.
 
-    Use --ci flag for AI-powered insights in reports (requires Anthropic API key).
-    The API key can be set via ANTHROPIC_API_KEY environment variable, config file,
-    or you will be prompted to enter it.
+    CI mode (--ci flag): Uses Anthropic API directly for automated pipelines.
+    Requires ANTHROPIC_API_KEY environment variable or config.
     """
-    # Check auth status (optional for now)
+    # Check auth status
     _require_auth()
 
     # Only show detailed logs in verbose mode
@@ -193,7 +330,6 @@ def analyze_latest(
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         )
     else:
-        # Suppress agent logs in non-verbose mode for cleaner progress display
         logging.basicConfig(level=logging.WARNING)
         logging.getLogger("agent").setLevel(logging.WARNING)
         logging.getLogger("urllib3").setLevel(logging.WARNING)
@@ -204,16 +340,11 @@ def analyze_latest(
         config_manager = ConfigManager()
         config = config_manager.load()
 
-        # Handle --ci flag for LLM-powered reports
-        ci_mode = False
-        if ci:
-            print_info("Setting up LLM-powered reports (CI mode)...")
-            _setup_ci_mode(config_manager)
-            ci_mode = True
-            print_success("CI mode enabled - reports will include AI-powered insights")
+        # Get auth token for API calls
+        auth_token = _get_auth_token()
 
-        # Import agent
-        from agent.agent import Agent, AgentConfig
+        # Import required modules
+        from agent.api_clients.integration_client import IntegrationServiceClient
         from agent.state_manager import StateManager
 
         # Show last poll timestamp
@@ -225,35 +356,14 @@ def analyze_latest(
         print_info(f"Last poll: {stats['last_poll']}")
         print_info(f"Previously processed: {stats['total_processed']} threads")
 
-        # Get provider-specific config
-        jira_project_key = None
-        notion_database_id = None
-        if config.jira:
-            jira_project_key = config.jira.project_key
-        if config.notion:
-            notion_database_id = config.notion.database_id
-
-        # Get auth token for API calls
-        auth_token = _get_auth_token()
-
-        # Build agent config
-        agent_config = AgentConfig(
-            integration_endpoint=config.aws.integration_endpoint,
-            evaluation_endpoint=config.aws.evaluation_endpoint,
+        # Initialize integration client
+        integration = IntegrationServiceClient(
+            endpoint=config.aws.integration_endpoint,
             api_key=config.aws.api_key,
             auth_token=auth_token,
-            provider=config.provider,
-            report_dir=config.defaults.report_dir,
-            project=config.langsmith.project,
-            jira_project_key=jira_project_key,
-            notion_database_id=notion_database_id,
-            ci_mode=ci_mode,
         )
 
-        # Create agent and run with progress display
-        agent = Agent(agent_config)
-
-        # Create progress callback for thread loading
+        # Fetch threads with progress display
         def progress_handler(phase: str, current: int, total: int, thread_id: str):
             if phase == "summaries":
                 loading_progress.start_summaries()
@@ -266,35 +376,104 @@ def analyze_latest(
                 loading_progress.complete()
 
         with ThreadLoadingProgress() as loading_progress:
+            threads = integration.get_annotated_threads(
+                limit=limit,
+                with_details=True,
+                progress_callback=progress_handler,
+            )
+
+        if not threads:
+            print_warning("No annotated threads found in queue")
+            raise typer.Exit(0)
+
+        print_success(f"Loaded {len(threads)} threads")
+
+        # =====================================================================
+        # Branch: CI mode (Anthropic API) vs Default mode (Claude Code CLI)
+        # =====================================================================
+
+        if ci:
+            # CI MODE: Use Anthropic API directly
+            print_info("Setting up LLM-powered reports (CI mode)...")
+            _setup_ci_mode(config_manager)
+            print_success("CI mode enabled - using Anthropic API")
+
+            # Import agent for CI mode
+            from agent.agent import Agent, AgentConfig
+
+            # Get provider-specific config
+            jira_project_key = None
+            notion_database_id = None
+            if config.jira:
+                jira_project_key = config.jira.project_key
+            if config.notion:
+                notion_database_id = config.notion.database_id
+
+            # Build agent config
+            agent_config = AgentConfig(
+                integration_endpoint=config.aws.integration_endpoint,
+                evaluation_endpoint=config.aws.evaluation_endpoint,
+                api_key=config.aws.api_key,
+                auth_token=auth_token,
+                provider=config.provider,
+                report_dir=config.defaults.report_dir,
+                project=config.langsmith.project,
+                jira_project_key=jira_project_key,
+                notion_database_id=notion_database_id,
+                ci_mode=True,
+            )
+
+            # Create agent and run
+            agent = Agent(agent_config)
             summary = agent.run(
                 limit=limit,
                 create_tickets=not dry_run,
                 dry_run=dry_run,
                 skip_processed=True,
                 force_reprocess=False,
-                progress_callback=progress_handler,
             )
 
-        # Display results
-        console.print()
-        print_header("Analysis Summary")
-        console.print(f"  Threads analyzed: {summary['threads_analyzed']}")
-        console.print(f"  Threads skipped:  {summary['threads_skipped']}")
-        console.print(f"  Issues found:     {summary['issues_found']}")
-        console.print(f"  Tickets created:  {summary['tickets_created']}")
+            # Display results
+            console.print()
+            print_header("Analysis Summary")
+            console.print(f"  Threads analyzed: {summary['threads_analyzed']}")
+            console.print(f"  Threads skipped:  {summary['threads_skipped']}")
+            console.print(f"  Issues found:     {summary['issues_found']}")
+            console.print(f"  Tickets created:  {summary['tickets_created']}")
 
-        if summary.get("report_paths"):
-            console.print("\n[cyan]Generated Reports:[/cyan]")
-            for path in summary["report_paths"]:
-                console.print(f"  - {path}")
+            if summary.get("report_paths"):
+                console.print("\n[cyan]Generated Reports:[/cyan]")
+                for path in summary["report_paths"]:
+                    console.print(f"  - {path}")
 
-        if dry_run:
-            print_warning("Dry run mode - no tickets were created")
+            if dry_run:
+                print_warning("Dry run mode - no tickets were created")
+
+        else:
+            # DEFAULT MODE: Spawn Claude Code CLI for interactive analysis
+            # Convert threads to JSON for Claude Code
+            thread_data = [t.to_dict() for t in threads]
+            threads_json = json.dumps(thread_data, indent=2, default=str)
+
+            # Build config dict for the prompt
+            config_dict = {
+                "provider": config.provider,
+                "project": config.langsmith.project,
+                "report_dir": str(config.defaults.report_dir),
+            }
+
+            # Spawn Claude Code CLI
+            exit_code = _spawn_claude_code(threads_json, config_dict, verbose)
+
+            if exit_code != 0:
+                raise typer.Exit(exit_code)
 
     except FileNotFoundError as e:
         print_error(str(e))
         print_info("Run 'geni init' to set up configuration")
         raise typer.Exit(1)
+    except typer.Exit:
+        raise
     except Exception as e:
         print_error(f"Analysis failed: {e}")
         if verbose:

@@ -1,11 +1,11 @@
-# /analyze-threads
+# /analyze-latest
 
 Analyzes LangSmith annotation queue threads using Claude Code's native intelligence.
 
 ## Usage
 
 ```
-/analyze-threads [--limit N] [--thread-id ID] [--inline]
+/analyze-latest [--limit N] [--thread-id ID] [--inline]
 ```
 
 ## Options
@@ -169,6 +169,93 @@ After analysis (either inline or parallel), output a formatted report:
 [For each thread, show key findings]
 ```
 
+### Step 5: Generate IssueCards and Create Tickets
+
+For each issue identified with severity **critical** or **high**, generate an IssueCard and offer to create tickets.
+
+#### IssueCard Format
+
+Generate a JSON object matching the IssueCard schema:
+
+```json
+{
+  "title": "Brief, descriptive issue title",
+  "priority": "HIGH",
+  "category": "BUG",
+  "status": "BACKLOG",
+  "details": "Technical details from analysis including error messages, performance metrics, and context",
+  "description": "User-facing description of the issue and its impact",
+  "recommendation": "Specific, actionable recommendation from the analysis",
+  "affected_code": {
+    "component": "Affected component or step name from the thread",
+    "suggestion": "Specific improvement suggestion"
+  },
+  "sources": {
+    "thread_id": "The thread UUID from the analyzed data",
+    "thread_name": "The thread name from the analyzed data",
+    "run_id": "The run ID if available",
+    "langsmith_url": "https://smith.langchain.com/o/{org}/projects/{project}/t/{thread_id}"
+  },
+  "evaluation_results": []
+}
+```
+
+#### Field Mapping
+
+| Analysis Field | IssueCard Field | Mapping |
+|---------------|-----------------|---------|
+| Issue severity | priority | critical→CRITICAL, high→HIGH, medium→MEDIUM, low→LOW |
+| Issue type | category | error→BUG, slow→PERFORMANCE, quality→QUALITY, etc. |
+| Issue description | details | Full technical details |
+| Brief summary | description | One-liner summary |
+| Recommendation | recommendation | The actionable fix |
+| Affected step | affected_code.component | Step or component name |
+| Thread metadata | sources | thread_id, thread_name, etc. |
+
+#### Category Selection
+
+Choose the most appropriate category:
+- **BUG**: Errors, exceptions, failures
+- **PERFORMANCE**: Slow execution, high latency, timeouts
+- **OPTIMIZATION**: Token efficiency, cost concerns
+- **QUALITY**: Poor responses, incomplete answers
+- **ERROR**: System errors, integration failures
+- **TECHNICAL_DEBT**: Code quality issues
+
+#### User Confirmation
+
+After generating IssueCards, ask the user:
+
+> **Found {N} issues to create tickets for:**
+> 1. [CRITICAL] {issue_1_title}
+> 2. [HIGH] {issue_2_title}
+> ...
+>
+> **Create tickets?** (yes/no/select specific ones)
+
+#### Ticket Creation
+
+If the user approves, create tickets using the CLI:
+
+```bash
+geni ticket create '<ISSUECARD_JSON>'
+```
+
+For each IssueCard, run the command and capture the result:
+
+```bash
+# Example for a single issue
+geni ticket create '{"title":"High Latency in Query Processing","priority":"HIGH","category":"PERFORMANCE","status":"BACKLOG","details":"Thread execution took 45.2s, exceeding 30s threshold. Bottleneck in retrieval step.","description":"Performance issue affecting user experience during query processing","recommendation":"Investigate retrieval step bottleneck; consider caching frequent queries","affected_code":{"component":"retrieval_step","suggestion":"Add connection pooling and result caching"},"sources":{"thread_id":"abc123...","thread_name":"User Query: How to configure...","langsmith_url":"https://smith.langchain.com/..."},"evaluation_results":[]}'
+```
+
+#### Report Created Tickets
+
+After creating tickets, report the results:
+
+> **Tickets Created:**
+> - PROJ-123: High Latency in Query Processing (https://jira.example.com/browse/PROJ-123)
+> - PROJ-124: Authentication Error in Login Flow (https://jira.example.com/browse/PROJ-124)
+
 ## Prerequisites
 
 - geniable CLI installed and configured (`pip install geniable`)
@@ -179,25 +266,25 @@ After analysis (either inline or parallel), output a formatted report:
 
 ### Single Thread Deep-Dive
 ```
-/analyze-threads --thread-id abc123def456
+/analyze-latest --thread-id abc123def456
 ```
 Performs detailed inline analysis with opportunity for follow-up questions.
 
 ### Small Batch (Interactive)
 ```
-/analyze-threads --limit 3
+/analyze-latest --limit 3
 ```
 Analyzes 3 threads inline, allowing you to ask clarifying questions.
 
 ### Large Batch (Efficient)
 ```
-/analyze-threads --limit 10
+/analyze-latest --limit 10
 ```
 Spawns parallel subagents for efficient batch processing, returns consolidated report.
 
 ### Force Inline for Large Batch
 ```
-/analyze-threads --limit 10 --inline
+/analyze-latest --limit 10 --inline
 ```
 Forces inline analysis even for 10 threads (slower but allows follow-ups).
 
@@ -206,4 +293,5 @@ Forces inline analysis even for 10 threads (slower but allows follow-ups).
 1. Start with `--limit 3` for interactive exploration
 2. Use `--thread-id` for deep-diving into specific issues
 3. Use larger limits without `--inline` when you need a quick overview
-4. After batch analysis, you can `/analyze-threads --thread-id X` to deep-dive
+4. After batch analysis, you can `/analyze-latest --thread-id X` to deep-dive
+5. Critical/high issues automatically get IssueCard generation for ticket creation
