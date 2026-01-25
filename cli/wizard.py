@@ -96,6 +96,10 @@ class ConfigWizard:
                     console.print(f"  - {skill}")
 
             console.print("[dim]Skills available: /analyze-latest[/dim]")
+            console.print(
+                "\n[yellow]Note:[/yellow] If Claude Code is currently running, "
+                "restart it to detect the new command."
+            )
 
         except Exception as e:
             console.print(f"[yellow]![/yellow] Failed to install skills: {e}")

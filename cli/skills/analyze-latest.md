@@ -1,297 +1,230 @@
 # /analyze-latest
 
-Analyzes LangSmith annotation queue threads using Claude Code's native intelligence.
+Analyzes LangSmith annotation queue threads using Claude Code's native intelligence with a seamless, low-interruption workflow.
 
 ## Usage
 
 ```
-/analyze-latest [--limit N] [--thread-id ID] [--inline]
+/analyze-latest [--limit N]
 ```
 
 ## Options
 
 - `--limit N`: Number of threads to analyze (default: 5)
-- `--thread-id ID`: Analyze a specific thread by ID
-- `--inline`: Force inline analysis even for large batches (>3 threads)
 
-## Workflow
+## Workflow Overview
 
-This skill uses a **hybrid approach**:
-- **Inline analysis** for single threads or small batches (<=3) - interactive, allows follow-ups
-- **Parallel subagents** for larger batches (>3) - efficient, returns consolidated summary
+This skill uses a **subagent architecture** for a smooth user experience:
 
-### Step 1: Fetch Thread Data
-
-Run the geni CLI to fetch thread data:
-
-```bash
-geni fetch --limit {limit} --output json
-```
-
-If a specific thread ID is provided:
-```bash
-geni fetch --thread-id {thread_id} --output json
-```
-
-### Step 2: Determine Analysis Mode
-
-Check the thread count from the fetched data:
-- If thread count <= 3 OR --inline flag is set: Use **Inline Analysis**
-- If thread count > 3 (and no --inline flag): Use **Parallel Subagent Analysis**
-
-### Step 3a: Inline Analysis (<=3 threads or --inline)
-
-For each thread, analyze in the main conversation context:
-
-1. **Status & Performance**
-   - Duration (flag if >30s)
-   - Token usage (flag if >50K)
-   - Success/failure status
-   - Step timing breakdown
-
-2. **User Query Assessment**
-   - Was the query clear and specific?
-   - Query complexity (simple/moderate/complex)
-   - Any ambiguities that may have affected response?
-
-3. **Response Quality**
-   - Based on annotation score (if available)
-   - Human feedback analysis
-   - Completeness of response
-
-4. **Error Analysis** (if applicable)
-   - Root cause identification
-   - Error categorization (timeout, validation, auth, etc.)
-   - Impact assessment
-
-5. **Improvement Opportunities**
-   - Specific, actionable recommendations
-   - Priority ranking (critical/high/medium/low)
-   - Affected code areas (if identifiable)
-
-Present findings and await follow-up questions from the user. This mode allows for interactive exploration.
-
-### Step 3b: Parallel Subagent Analysis (>3 threads)
-
-For larger batches, spawn Task agents to analyze threads in parallel:
-
-```
-For each thread:
-  Use Task tool with:
-    subagent_type: "general-purpose"
-    description: "Analyzing thread {thread_id[:8]}"
-    prompt: |
-      Analyze this LangSmith thread and provide a structured analysis.
-
-      ## Thread Data
-      {thread_json}
-
-      ## Analysis Required
-      Provide a JSON response with:
-
-      {
-        "thread_id": "string",
-        "summary": {
-          "status": "success|failure|timeout|error",
-          "duration_seconds": number,
-          "token_usage": number,
-          "quality_indicator": "good|moderate|poor|unknown"
-        },
-        "key_observations": [
-          "Observation 1",
-          "Observation 2"
-        ],
-        "issues": [
-          {
-            "severity": "critical|high|medium|low",
-            "description": "Issue description",
-            "affected_step": "Step name or null"
-          }
-        ],
-        "recommendations": [
-          {
-            "priority": 1,
-            "action": "Specific recommendation",
-            "expected_impact": "What improvement this would bring"
-          }
-        ]
-      }
-
-      Focus on actionable insights. Be specific about what went wrong and how to fix it.
-      Return ONLY the JSON object, no additional text.
-```
-
-Launch all Task agents in a **single message** to enable parallel execution.
-
-Wait for all agents to complete, then aggregate results.
-
-### Step 4: Generate Consolidated Report
-
-After analysis (either inline or parallel), output a formatted report:
-
-```markdown
-# Thread Analysis Report
-
-**Analyzed**: {count} threads
-**Date**: {current_date}
-**Mode**: {inline|parallel}
-
-## Executive Summary
-
-- Total threads: {count}
-- Success rate: {percentage}%
-- Average duration: {avg}s
-- Total tokens used: {total}
-
-## Critical Issues
-
-[List any critical/high severity issues with thread references]
-
-## Cross-Thread Patterns
-
-[Identify patterns that appear across multiple threads]
-
-## Recommendations
-
-### Priority 1 (Critical)
-[List critical recommendations]
-
-### Priority 2 (High)
-[List high priority recommendations]
-
-### Priority 3 (Medium)
-[List medium priority recommendations]
+1. **Subagent** fetches and analyzes threads autonomously (no permission prompts)
+2. **Orchestrator** presents results and asks for ticket confirmation
+3. **User confirms** which tickets to create
+4. **Tickets created** and summary displayed
 
 ---
 
-## Per-Thread Details
+## Step 1: Spawn Analyzer Subagent
 
-[For each thread, show key findings]
+Use the Task tool to spawn a subagent with pre-approved permissions for `geni` commands:
+
+```
+Task tool parameters:
+  subagent_type: "general-purpose"
+  allowed_tools: ["Bash(geni *)"]
+  description: "Analyze LangSmith threads"
+  prompt: |
+    You are analyzing LangSmith threads for quality issues. Execute the following steps autonomously.
+
+    ## Step 1: Fetch Threads
+
+    Run this command to fetch unanalyzed threads:
+    ```bash
+    geni analyze fetch --limit {limit} --output json
+    ```
+
+    If no threads are returned, report "No unanalyzed threads found" and exit.
+
+    ## Step 2: Analyze Each Thread
+
+    For each thread, analyze:
+
+    1. **Status & Performance**
+       - Duration (flag if >30s)
+       - Token usage (flag if >50K)
+       - Success/failure status
+       - Step timing breakdown
+
+    2. **Quality Issues**
+       - Evaluator feedback exposed to users?
+       - Implementation details (SQL, etc.) exposed?
+       - Response completeness
+       - Error handling
+
+    3. **Patterns**
+       - Cross-thread patterns
+       - Repeated issues
+       - Root causes
+
+    ## Step 3: Generate IssueCards
+
+    For each CRITICAL or HIGH severity issue, create an IssueCard JSON:
+
+    ```json
+    {
+      "title": "Brief, descriptive issue title",
+      "priority": "CRITICAL|HIGH",
+      "category": "BUG|PERFORMANCE|OPTIMIZATION|QUALITY",
+      "status": "BACKLOG",
+      "details": "Technical details including metrics, error messages, affected threads",
+      "description": "User-facing summary of the issue impact",
+      "recommendation": "Specific, actionable fix recommendation",
+      "affected_code": {
+        "component": "Affected component or step name",
+        "suggestion": "Specific improvement suggestion"
+      },
+      "sources": {
+        "thread_id": "thread UUID",
+        "thread_name": "thread name",
+        "run_id": null,
+        "langsmith_url": "https://smith.langchain.com/..."
+      },
+      "evaluation_results": []
+    }
+    ```
+
+    ## Step 4: Mark Threads as Analyzed
+
+    After analysis, mark threads as done:
+    ```bash
+    geni analyze mark-done --thread-ids "id1,id2,id3"
+    ```
+
+    ## Step 5: Return Results
+
+    Return a JSON response with this structure:
+
+    ```json
+    {
+      "threads_analyzed": 5,
+      "threads_marked_done": 5,
+      "summary": {
+        "total_threads": 5,
+        "success_rate": 100,
+        "avg_duration_seconds": 55.99,
+        "total_tokens": 1355775,
+        "critical_issues": 2,
+        "high_issues": 2,
+        "patterns": ["Evaluator feedback exposure", "High token consumption"]
+      },
+      "issue_cards": [
+        { "title": "...", "priority": "CRITICAL", ... },
+        { "title": "...", "priority": "HIGH", ... }
+      ]
+    }
+    ```
+
+    Return ONLY the JSON object, no additional text or markdown.
 ```
 
-### Step 5: Generate IssueCards and Create Tickets
+Wait for the subagent to complete and return results.
 
-For each issue identified with severity **critical** or **high**, generate an IssueCard and offer to create tickets.
+---
 
-#### IssueCard Format
+## Step 2: Present Results to User
 
-Generate a JSON object matching the IssueCard schema:
+After receiving the subagent's response, present a formatted summary:
 
-```json
-{
-  "title": "Brief, descriptive issue title",
-  "priority": "HIGH",
-  "category": "BUG",
-  "status": "BACKLOG",
-  "details": "Technical details from analysis including error messages, performance metrics, and context",
-  "description": "User-facing description of the issue and its impact",
-  "recommendation": "Specific, actionable recommendation from the analysis",
-  "affected_code": {
-    "component": "Affected component or step name from the thread",
-    "suggestion": "Specific improvement suggestion"
-  },
-  "sources": {
-    "thread_id": "The thread UUID from the analyzed data",
-    "thread_name": "The thread name from the analyzed data",
-    "run_id": "The run ID if available",
-    "langsmith_url": "https://smith.langchain.com/o/{org}/projects/{project}/t/{thread_id}"
-  },
-  "evaluation_results": []
-}
+```markdown
+## Thread Analysis Complete
+
+**Analyzed**: {threads_analyzed} threads
+**Success Rate**: {success_rate}%
+**Avg Duration**: {avg_duration}s
+**Total Tokens**: {total_tokens}
+
+### Issues Found
+
+{For each issue_card, display:}
+
+**{index}. [{priority}] {title}**
+- **Category**: {category}
+- **Details**: {details (truncated)}
+- **Recommendation**: {recommendation}
+- **Thread**: [{thread_name}]({langsmith_url})
+
+---
+
+**Create tickets?** (yes / no / select specific: "1,3")
 ```
 
-#### Field Mapping
+---
 
-| Analysis Field | IssueCard Field | Mapping |
-|---------------|-----------------|---------|
-| Issue severity | priority | critical→CRITICAL, high→HIGH, medium→MEDIUM, low→LOW |
-| Issue type | category | error→BUG, slow→PERFORMANCE, quality→QUALITY, etc. |
-| Issue description | details | Full technical details |
-| Brief summary | description | One-liner summary |
-| Recommendation | recommendation | The actionable fix |
-| Affected step | affected_code.component | Step or component name |
-| Thread metadata | sources | thread_id, thread_name, etc. |
+## Step 3: Handle User Confirmation
 
-#### Category Selection
+Based on user response:
 
-Choose the most appropriate category:
-- **BUG**: Errors, exceptions, failures
-- **PERFORMANCE**: Slow execution, high latency, timeouts
-- **OPTIMIZATION**: Token efficiency, cost concerns
-- **QUALITY**: Poor responses, incomplete answers
-- **ERROR**: System errors, integration failures
-- **TECHNICAL_DEBT**: Code quality issues
+- **"yes"**: Create all tickets
+- **"no"**: Skip ticket creation, end workflow
+- **"1,2"** or **"1,3,4"**: Create only selected tickets
+- **"details 2"**: Show full details of issue #2
 
-#### User Confirmation
+---
 
-After generating IssueCards, ask the user:
+## Step 4: Create Tickets
 
-> **Found {N} issues to create tickets for:**
-> 1. [CRITICAL] {issue_1_title}
-> 2. [HIGH] {issue_2_title}
-> ...
->
-> **Create tickets?** (yes/no/select specific ones)
-
-#### Ticket Creation
-
-If the user approves, create tickets using the CLI:
+For each approved IssueCard, run:
 
 ```bash
 geni ticket create '<ISSUECARD_JSON>'
 ```
 
-For each IssueCard, run the command and capture the result:
+Capture the ticket ID and URL from the response.
 
-```bash
-# Example for a single issue
-geni ticket create '{"title":"High Latency in Query Processing","priority":"HIGH","category":"PERFORMANCE","status":"BACKLOG","details":"Thread execution took 45.2s, exceeding 30s threshold. Bottleneck in retrieval step.","description":"Performance issue affecting user experience during query processing","recommendation":"Investigate retrieval step bottleneck; consider caching frequent queries","affected_code":{"component":"retrieval_step","suggestion":"Add connection pooling and result caching"},"sources":{"thread_id":"abc123...","thread_name":"User Query: How to configure...","langsmith_url":"https://smith.langchain.com/..."},"evaluation_results":[]}'
+---
+
+## Step 5: Report Results
+
+Display final summary:
+
+```markdown
+## Tickets Created
+
+| Ticket | Priority | Title | URL |
+|--------|----------|-------|-----|
+| PROJ-123 | CRITICAL | Evaluator feedback visible... | [Link](url) |
+| PROJ-124 | HIGH | Response latency exceeds... | [Link](url) |
+
+Analysis complete. {N} tickets created in Jira/Notion.
 ```
 
-#### Report Created Tickets
-
-After creating tickets, report the results:
-
-> **Tickets Created:**
-> - PROJ-123: High Latency in Query Processing (https://jira.example.com/browse/PROJ-123)
-> - PROJ-124: Authentication Error in Login Flow (https://jira.example.com/browse/PROJ-124)
+---
 
 ## Prerequisites
 
 - geniable CLI installed and configured (`pip install geniable`)
-- Valid geniable authentication (`geni login`)
-- Active venv if running from project directory
+- Valid geniable authentication (`geni login` + `geni init`)
+- Claude Code restarted after `geni init` (to detect this skill)
 
-## Examples
+## Category Reference
 
-### Single Thread Deep-Dive
-```
-/analyze-latest --thread-id abc123def456
-```
-Performs detailed inline analysis with opportunity for follow-up questions.
+| Category | When to Use |
+|----------|-------------|
+| BUG | Errors, exceptions, failures, incorrect behavior |
+| PERFORMANCE | Slow execution, high latency, timeouts |
+| OPTIMIZATION | Token efficiency, cost concerns, resource usage |
+| QUALITY | Poor responses, incomplete answers, UX issues |
 
-### Small Batch (Interactive)
-```
-/analyze-latest --limit 3
-```
-Analyzes 3 threads inline, allowing you to ask clarifying questions.
+## Priority Mapping
 
-### Large Batch (Efficient)
-```
-/analyze-latest --limit 10
-```
-Spawns parallel subagents for efficient batch processing, returns consolidated report.
-
-### Force Inline for Large Batch
-```
-/analyze-latest --limit 10 --inline
-```
-Forces inline analysis even for 10 threads (slower but allows follow-ups).
+| Severity | Priority | Description |
+|----------|----------|-------------|
+| Critical | CRITICAL | Blocks users, data loss, security issue |
+| High | HIGH | Significant impact, needs prompt fix |
+| Medium | MEDIUM | Moderate impact, can be scheduled |
+| Low | LOW | Minor issue, nice-to-have fix |
 
 ## Tips
 
-1. Start with `--limit 3` for interactive exploration
-2. Use `--thread-id` for deep-diving into specific issues
-3. Use larger limits without `--inline` when you need a quick overview
-4. After batch analysis, you can `/analyze-latest --thread-id X` to deep-dive
-5. Critical/high issues automatically get IssueCard generation for ticket creation
+1. Review the issue details before confirming ticket creation
+2. Use "select" option to create only the most important tickets
+3. Run periodically to catch new issues in your annotation queue
