@@ -79,6 +79,7 @@ class IssueCard(BaseModel):
         "TECHNICAL_DEBT",
         "ERROR",
         "QUALITY",
+        "SECURITY",
     ] = Field(..., description="Issue category classification")
     status: str = Field(default="BACKLOG", description="Issue workflow status")
     details: str = Field(..., description="Detailed issue description with context")

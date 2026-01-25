@@ -1,317 +1,318 @@
 # Geniable
 
-A hybrid local-cloud QA pipeline for analyzing LangSmith conversation threads, running evaluations, and creating issue tickets.
+**Hybrid Local-Cloud QA Pipeline for LangSmith Thread Analysis**
 
-## Components
-
-| Component | Description | Documentation |
-|-----------|-------------|---------------|
-| **CLI** | Local command-line interface for analysis | [cli/README.md](cli/README.md) |
-| **Integration Service** | AWS Lambda for LangSmith/Jira/Notion integration | [cloud/](cloud/) |
-| **Evaluation Service** | AWS Lambda for running evaluation tools | [cloud/](cloud/) |
-
-## Quick Start (CLI)
-
-```bash
-# Install
-pip install -r requirements.txt
-
-# Initialize (configures credentials and syncs to AWS Secrets Manager)
-geni init
-
-# Run analysis
-geni analyze-latest
-```
-
-See [cli/README.md](cli/README.md) for full CLI documentation.
-
----
-
-# Lambda Deployment (Legacy)
-
-AWS Lambda function that polls LangSmith annotation queues, analyzes conversation threads for issues, and creates issue pages in Notion.
+Geniable analyzes your LangSmith conversation threads for quality issues, performance problems, and errors—then creates tickets in Jira or Notion automatically.
 
 ## Features
 
-- **On-demand invocation** via API Gateway or direct Lambda invoke
-- **DynamoDB state persistence** for tracking processed threads
-- **Direct Notion SDK integration** with dynamic property detection
-- **Automatic issue classification** based on error patterns, performance, and token usage
-- **SAM-based deployment** for infrastructure as code
+- **Thread Analysis** - Fetch and analyze threads from your LangSmith annotation queue
+- **Issue Detection** - Identify performance, quality, security, and UX issues
+- **Ticket Creation** - Create standardized issue tickets in Jira or Notion
+- **Claude Code Integration** - Interactive analysis via `/analyze-latest` command
+- **CI/CD Support** - Automated analysis for pipelines using Anthropic API
+- **State Tracking** - Avoids reprocessing already-analyzed threads
 
-## Architecture
+---
 
+## Installation
+
+```bash
+pip install geniable
 ```
-LangSmith Annotation Queue
-         │
-         ▼
-    AWS Lambda (geniable)
-         │
-         ├──► Analyze threads for issues
-         │    - Performance (long execution time > 30s)
-         │    - Token usage (high token count > 50K)
-         │    - Errors in execution steps
-         │
-         ├──► Create issues in Notion
-         │
-         └──► Track state in DynamoDB
+
+Or install from source:
+
+```bash
+git clone https://github.com/mnedelko/geniable.git
+cd geniable
+pip install -e .
 ```
+
+**Requirements:** Python 3.11+
+
+---
 
 ## Quick Start
 
-### Prerequisites
+### 1. Login
 
-- Python 3.11+
-- AWS CLI configured
-- AWS SAM CLI installed
-- Docker (for building with native dependencies)
-- LangSmith API key
-- Notion integration token with database access
+```bash
+geni login
+```
+
+Authenticate with your email and password. Tokens are stored securely.
+
+### 2. Initialize
+
+```bash
+geni init
+```
+
+Interactive wizard that configures:
+- LangSmith API credentials and annotation queue
+- Issue tracker (Jira, Notion, or none)
+- Claude Code integration (optional)
+
+### 3. Analyze
+
+```bash
+geni analyze-latest
+```
+
+Fetches unanalyzed threads and launches the Geni Analyzer for interactive analysis.
+
+---
+
+## Commands
+
+### Authentication
+
+| Command | Description |
+|---------|-------------|
+| `geni login` | Login to Geniable |
+| `geni logout` | Logout and clear tokens |
+| `geni whoami` | Show current user |
 
 ### Configuration
 
-1. Copy environment template:
+| Command | Description |
+|---------|-------------|
+| `geni init` | Interactive setup wizard |
+| `geni configure --show` | Display current configuration |
+| `geni configure --validate` | Test all service connections |
+| `geni configure --sync-secrets` | Sync credentials to cloud |
 
-```bash
-cp .env.example .env
+### Analysis
+
+| Command | Description |
+|---------|-------------|
+| `geni analyze latest` | Analyze latest threads from queue |
+| `geni analyze latest --limit 10` | Analyze up to 10 threads |
+| `geni analyze latest --dry-run` | Analyze without creating tickets |
+| `geni analyze latest --ci` | Automated mode for CI/CD pipelines |
+
+### Tickets
+
+| Command | Description |
+|---------|-------------|
+| `geni ticket create '<json>'` | Create ticket from IssueCard JSON |
+
+### Utilities
+
+| Command | Description |
+|---------|-------------|
+| `geni status` | Show connection status |
+| `geni stats` | Show processing history |
+| `geni clear-state` | Reset processing state |
+| `geni --version` | Show version |
+
+---
+
+## Configuration
+
+Configuration is stored in `~/.geniable.yaml`:
+
+```yaml
+langsmith:
+  api_key: "ls_..."
+  project: "my-project"
+  queue: "quality-review"
+
+provider: "jira"  # or "notion" or "none"
+
+jira:
+  base_url: "https://company.atlassian.net"
+  email: "user@company.com"
+  api_token: "..."
+  project_key: "PROJ"
+  issue_type: "Bug"
+
+defaults:
+  report_dir: "./reports"
+  log_level: "INFO"
 ```
 
-2. Fill in your credentials in `.env`:
+### Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `LANGSMITH_API_KEY` | Yes | LangSmith API key from https://smith.langchain.com/settings |
-| `LANGSMITH_PROJECT` | No | Project name (default: `insights-agent-v2`) |
-| `LANGSMITH_QUEUE` | Yes | Annotation queue name (exact match required) |
-| `NOTION_API_KEY` | Yes | Notion integration token |
-| `NOTION_DATABASE_ID` | Yes | Target Notion database ID |
-| `NOTION_DATA_SOURCE_ID` | Yes | Data source ID for page creation |
-
-### Deployment
+Override any config value with environment variables:
 
 ```bash
-# Build with Docker (required for native dependencies)
-sam build --use-container
-
-# Deploy to dev environment
-make deploy-dev
+export LANGSMITH_API_KEY="ls_..."
+export JIRA_API_TOKEN="..."
+export ANTHROPIC_API_KEY="sk-ant-..."  # Required for --ci mode
 ```
 
-After deployment, update Lambda environment variables directly:
+---
+
+## Claude Code Integration
+
+Geniable integrates with Claude Code for interactive analysis.
+
+### Setup
+
+During `geni init`, Geniable installs:
+- **Skill**: `.claude/commands/analyze-latest.md`
+- **Agent**: `.claude/agents/Geni Analyzer.md`
+- **Permissions**: `.claude/settings.local.json`
+
+### Usage
+
+In Claude Code, run:
+
+```
+/analyze-latest
+```
+
+The Geni Analyzer agent will:
+1. Fetch unanalyzed threads from your LangSmith queue
+2. Analyze each thread for issues (security, quality, performance, UX)
+3. Generate potential solutions for each issue
+4. Present findings and ask for ticket creation confirmation
+5. Create tickets in Jira/Notion for approved issues
+
+---
+
+## Usage Modes
+
+### Interactive Mode (Default)
 
 ```bash
-aws lambda update-function-configuration \
-  --function-name geniable-dev \
-  --region ap-southeast-2 \
-  --environment "Variables={
-    LANGSMITH_API_KEY=your_key,
-    LANGSMITH_PROJECT=insights-agent-v2,
-    LANGSMITH_QUEUE=Your Queue Name,
-    NOTION_API_KEY=your_notion_key,
-    NOTION_DATABASE_ID=your_db_id,
-    NOTION_DATA_SOURCE_ID=your_ds_id,
-    DYNAMODB_TABLE_NAME=langsmith-thread-state-dev,
-    AWS_REGION_NAME=ap-southeast-2,
-    LOG_LEVEL=INFO
-  }"
+geni analyze-latest
 ```
 
-## Usage
+Launches Claude Code for real-time, interactive analysis. Best for development and debugging.
 
-### Actions
-
-| Action | Description |
-|--------|-------------|
-| `poll` | Check annotation queue for new threads |
-| `full` | Poll + process all new threads (creates Notion issues) |
-| `status` | Get processing statistics |
-| `process` | Process a specific thread by ID |
-
-### Direct Lambda Invocation (Recommended)
-
-**Poll for new threads:**
-```bash
-aws lambda invoke \
-  --function-name geniable-dev \
-  --payload '{"action":"poll"}' \
-  --cli-binary-format raw-in-base64-out \
-  --region ap-southeast-2 \
-  /dev/stdout
-```
-
-**Full processing (poll + create issues):**
-```bash
-aws lambda invoke \
-  --function-name geniable-dev \
-  --payload '{"action":"full"}' \
-  --cli-binary-format raw-in-base64-out \
-  --region ap-southeast-2 \
-  /dev/stdout
-```
-
-**Check status:**
-```bash
-aws lambda invoke \
-  --function-name geniable-dev \
-  --payload '{"action":"status"}' \
-  --cli-binary-format raw-in-base64-out \
-  --region ap-southeast-2 \
-  /dev/stdout
-```
-
-**Process specific thread:**
-```bash
-aws lambda invoke \
-  --function-name geniable-dev \
-  --payload '{"action":"process","thread_id":"your-thread-uuid"}' \
-  --cli-binary-format raw-in-base64-out \
-  --region ap-southeast-2 \
-  /dev/stdout
-```
-
-### Makefile Commands
+### CI/CD Mode
 
 ```bash
-make invoke-dev-full    # Poll + process all new threads
-make invoke-dev-poll    # Just poll for new threads
-make invoke-dev-status  # Get processing statistics
-make logs-dev           # Tail Lambda logs
-make outputs-dev        # Show stack outputs
+export ANTHROPIC_API_KEY="sk-ant-..."
+geni analyze-latest --ci
 ```
 
-### API Gateway (requires API key)
+Automated analysis using Anthropic API directly. Best for scheduled pipelines.
+
+### Report-Only Mode
 
 ```bash
-# Poll
-curl -X POST https://{api-id}.execute-api.ap-southeast-2.amazonaws.com/dev/analyze \
-  -H "x-api-key: {api-key}" \
-  -H "Content-Type: application/json" \
-  -d '{"action": "poll"}'
-
-# Full processing
-curl -X POST https://{api-id}.execute-api.ap-southeast-2.amazonaws.com/dev/analyze \
-  -H "x-api-key: {api-key}" \
-  -H "Content-Type: application/json" \
-  -d '{"action": "full"}'
-
-# Status
-curl https://{api-id}.execute-api.ap-southeast-2.amazonaws.com/dev/status \
-  -H "x-api-key: {api-key}"
+geni analyze-latest --dry-run
 ```
 
-Get API key: `make get-api-key-dev`
+Generates reports without creating tickets. Best for previewing analysis.
+
+---
+
+## Reports
+
+Analysis reports are saved to `./reports/` (configurable):
+
+```
+reports/
+├── processing_state.json          # Tracks processed threads
+├── Thread-ProjectName-abc123.md   # Individual thread reports
+└── analysis_report_20250125.md    # Batch analysis reports
+```
+
+---
 
 ## Issue Detection
 
 The analyzer identifies these issue types:
 
-| Issue Type | Trigger | Priority |
-|------------|---------|----------|
-| Long Execution | Duration > 30 seconds | Medium |
-| High Token Usage | Tokens > 50,000 | Medium |
-| Step Errors | Any step with error | Based on severity |
-| Thread Errors | Thread-level errors | Based on severity |
+| Category | Examples | Priority |
+|----------|----------|----------|
+| **Security** | Data exposure, leaked internals, auth issues | Critical/High |
+| **Quality** | Incomplete responses, hallucinations, poor UX | High |
+| **Performance** | Slow response (>30s), high tokens (>50K) | High/Medium |
+| **Bug** | Errors, exceptions, failures | High |
 
-## Notion Database
-
-The client automatically detects your database schema and adapts to available properties.
-
-**Supported properties:**
-- Title property (required, auto-detected)
-- Priority (select)
-- Category (select)
-- Complexity (select)
-- Status (status or select)
-
-## AWS Resources Created
-
-| Resource | Name |
-|----------|------|
-| Lambda Function | `geniable-{env}` |
-| DynamoDB Table | `langsmith-thread-state-{env}` |
-| API Gateway | `geniable-api-{env}` |
-| CloudWatch Logs | `/aws/lambda/geniable-{env}` |
-| CloudWatch Alarm | Error threshold monitoring |
-
-## Project Structure
-
-```
-langsmith-lambda/
-├── src/
-│   ├── handler.py              # Lambda entry point
-│   ├── config.py               # Environment configuration
-│   ├── langsmith_client.py     # LangSmith API client
-│   ├── notion_issue_client.py  # Notion SDK integration
-│   ├── state_manager.py        # DynamoDB state operations
-│   ├── issue_classifier.py     # Issue classification logic
-│   └── models/                 # Data models
-├── template.yaml               # SAM template
-├── samconfig.toml              # SAM configuration
-├── Makefile                    # Build/deploy commands
-├── requirements.txt            # Python dependencies
-└── .env                        # Environment variables (not committed)
-```
+---
 
 ## Troubleshooting
 
-### Check Lambda Logs
+### "Authentication required"
+
 ```bash
-make logs-dev
-# or
-aws logs tail /aws/lambda/geniable-dev --since 10m --region ap-southeast-2
+geni login
 ```
 
-### Reset Processed State
-To reprocess a thread, delete it from DynamoDB:
+### "Configuration file not found"
+
 ```bash
-aws dynamodb delete-item \
-  --table-name langsmith-thread-state-dev \
-  --region ap-southeast-2 \
-  --key '{"pk": {"S": "THREAD#your-thread-id"}, "sk": {"S": "METADATA"}}'
+geni init
 ```
 
-### Common Issues
+### Service validation failures
 
-1. **Missing environment variables**: SAM parameter overrides may not work correctly with special characters. Update Lambda configuration directly via AWS CLI or console.
+```bash
+geni configure --validate
+```
 
-2. **Notion property errors**: The client auto-detects database properties. Check logs to see detected properties: `Database properties: [...]`
+### Reset processing state
 
-3. **Queue not found**: Verify the exact queue name matches (including any typos in the original name).
+To reprocess all threads:
 
-4. **No new threads found**: Threads are tracked in DynamoDB. Use the reset command above to reprocess.
+```bash
+geni clear-state -y
+```
+
+### Debug mode
+
+```bash
+geni analyze-latest --verbose
+```
+
+---
 
 ## Development
 
 ```bash
-# Install dependencies
-make install-dev
+# Install dev dependencies
+pip install -e ".[dev]"
 
-# Run tests
-make test
+# Quality checks
+make lint        # Ruff linting
+make format      # Black + isort
+make typecheck   # Mypy
 
-# Run with coverage
-make test-coverage
-
-# Format code
-make format
-
-# Lint
-make lint
-
-# Local testing with SAM
-make local
+# Testing
+make test        # All tests with coverage
+make test-unit   # Unit tests only
 ```
 
-## Estimated Costs
+---
 
-| Usage | Lambda | DynamoDB | API Gateway | Total |
-|-------|--------|----------|-------------|-------|
-| 10 invocations/day | $0.50 | $1.00 | $0.50 | ~$2/month |
-| 100 invocations/day | $2.00 | $5.00 | $3.50 | ~$10/month |
+## Architecture
 
-## Cleanup
-
-```bash
-# Delete dev stack
-make delete-dev
 ```
+┌─────────────────────────────────────────────────────────────┐
+│                       LOCAL (geniable/)                      │
+│  CLI → Agent → API Clients → AWS Cloud Services             │
+└─────────────────────┬───────────────────────────────────────┘
+                      │ REST API + Cognito Auth
+┌─────────────────────▼───────────────────────────────────────┐
+│                    AWS CLOUD                                 │
+│  ┌─────────────────────────┐   ┌──────────────────────────┐ │
+│  │ Integration Service     │   │ Evaluation Service       │ │
+│  │ • /threads/annotated    │   │ • /evaluations/discovery │ │
+│  │ • /threads/{id}/details │   │ • /evaluations/execute   │ │
+│  │ • /integrations/ticket  │   │                          │ │
+│  └─────────────────────────┘   └──────────────────────────┘ │
+│                                                              │
+│  DynamoDB (state) + Secrets Manager (credentials)           │
+└──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## License
+
+MIT
+
+---
+
+## Links
+
+- **Repository**: https://github.com/mnedelko/geniable
+- **Issues**: https://github.com/mnedelko/geniable/issues
+- **PyPI**: https://pypi.org/project/geniable/
