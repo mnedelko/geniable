@@ -11,19 +11,29 @@ allowed_tools:
 
 You are analyzing LangSmith threads for quality issues. Execute the following workflow autonomously.
 
-## Step 1: Fetch Threads
+## Step 1: Fetch Unanalyzed Threads
 
-Run this command to fetch unanalyzed threads from the annotation queue:
+Run this command to fetch threads that haven't been analyzed yet:
 
 ```bash
-geni analyze fetch --limit 5 --output json
+geni analyze fetch --output json
 ```
 
-If no threads are returned or the result is empty, report "No unanalyzed threads found in the annotation queue" and exit.
+The AWS service automatically filters out previously analyzed threads. The response includes:
+- `total_in_queue`: Total threads in the annotation queue
+- `skipped`: Threads already analyzed (filtered out)
+- `returned`: New threads to analyze
+- `threads`: Array of thread data
+
+**Report the filtering stats to the user**, for example:
+"Found 12 threads in queue, 5 skipped (previously analyzed), 7 new threads to analyze"
+
+If `returned` is 0, report "No new threads to analyze - all threads in queue have been previously analyzed" and exit.
 
 ## Step 2: Analyze Each Thread
 
-For each thread returned, perform a comprehensive analysis:
+For each thread in the `threads` array, perform analysis. Track progress by reporting:
+"Analyzing thread 1 of 7: [thread_name]"
 
 ### 2.1 Status & Performance
 - Duration (flag if >30s as performance concern)
@@ -90,13 +100,13 @@ For each CRITICAL or HIGH severity issue found, create an IssueCard in this exac
 
 ## Step 4: Mark Threads as Analyzed
 
-After completing analysis, mark all analyzed threads as done:
+After completing analysis, mark ALL analyzed threads as done so they won't appear in future fetches:
 
 ```bash
-geni analyze mark-done --thread-ids "id1,id2,id3"
+geni analyze mark-done --thread-ids "id1,id2,id3,id4,id5,id6,id7"
 ```
 
-Replace `id1,id2,id3` with the actual comma-separated thread IDs.
+Replace with the actual comma-separated thread IDs from the threads you analyzed.
 
 ## Step 5: Present Results
 
@@ -105,10 +115,9 @@ Present your findings in this format:
 ```markdown
 ## Thread Analysis Complete
 
-**Analyzed**: {number} threads
-**Success Rate**: {percentage}%
-**Avg Duration**: {seconds}s
-**Total Tokens**: {count}
+**Queue Status**: {total_in_queue} threads in queue
+**Previously Analyzed**: {skipped} threads (skipped)
+**Newly Analyzed**: {returned} threads
 
 ### Issues Found
 
@@ -170,5 +179,6 @@ Analysis complete. {N} tickets created.
 ## Error Handling
 
 - If `geni analyze fetch` fails, report the error and suggest running `geni login` or `geni init`
+- If `geni analyze mark-done` fails, warn but continue - this only affects future duplicate detection
 - If `geni ticket create` fails, continue with remaining tickets and report failures at the end
 - If authentication errors occur, suggest re-running `geni login`

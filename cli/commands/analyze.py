@@ -747,25 +747,28 @@ def analyze_specific(
 
 @app.command("fetch")
 def fetch(
-    limit: int = typer.Option(5, "--limit", "-l", help="Number of threads to fetch"),
+    limit: int = typer.Option(50, "--limit", "-l", help="Maximum threads to fetch from queue"),
     thread_id: Optional[str] = typer.Option(
         None, "--thread-id", "-t", help="Fetch a specific thread by ID"
     ),
-    output: str = typer.Option("json", "--output", "-o", help="Output format: json or yaml"),
+    output: str = typer.Option("json", "--output", "-o", help="Output format: json, yaml, or summary"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
-    """Fetch thread data without analysis (for Claude Code skill integration).
+    """Fetch unanalyzed threads from LangSmith annotation queue.
 
-    This command fetches raw thread data from LangSmith and outputs it in a
-    structured format suitable for analysis by Claude Code's native intelligence.
+    The AWS service automatically filters out previously analyzed threads,
+    so you only get new threads that haven't been processed yet.
 
     Examples:
 
-        geni fetch --limit 5 --output json
+        geni analyze fetch --output summary
+        # Shows: Found 12 threads, 5 skipped (previously analyzed), 7 new
 
-        geni fetch --thread-id abc123 --output json
+        geni analyze fetch --output json
+        # Returns JSON array of unanalyzed threads
 
-        geni fetch --limit 10 | claude "Analyze these threads"
+        geni analyze fetch --thread-id abc123
+        # Fetch a specific thread by ID
     """
     # Check auth status
     _require_auth()
@@ -794,52 +797,76 @@ def fetch(
             auth_token=auth_token,
         )
 
-        # Fetch threads
+        # Fetch threads with metadata
         if thread_id:
             # Fetch specific thread by ID
-            threads = integration.get_annotated_threads(
-                limit=1,
-                with_details=True,
-            )
+            result = integration.fetch_threads(limit=1, with_details=True)
             # Filter to the specific thread
-            threads = [t for t in threads if t.thread_id == thread_id]
-            if not threads:
-                print_error(f"Thread not found: {thread_id}", file=console.file)
+            result.threads = [t for t in result.threads if t.thread_id == thread_id]
+            if not result.threads:
+                print_error(f"Thread not found: {thread_id}")
                 raise typer.Exit(1)
         else:
-            # Fetch latest threads
-            threads = integration.get_annotated_threads(
-                limit=limit,
-                with_details=True,
-            )
+            # Fetch latest unanalyzed threads
+            result = integration.fetch_threads(limit=limit, with_details=True)
 
-        if not threads:
-            # Output empty array for consistent parsing
+        # Handle different output formats
+        if output == "summary":
+            # Human-readable summary for Claude Code agent
+            console.print(
+                f"Found {result.total_in_queue} threads in queue, "
+                f"{result.skipped} skipped (previously analyzed), "
+                f"{result.returned} new threads to analyze"
+            )
+            if result.threads:
+                console.print("\nThreads to analyze:")
+                for i, t in enumerate(result.threads, 1):
+                    console.print(f"  {i}. {t.name} ({t.thread_id[:8]}...)")
+            return
+
+        if not result.threads:
+            # Output empty result for consistent parsing
             if output == "json":
-                print("[]")
+                output_data = {
+                    "threads": [],
+                    "total_in_queue": result.total_in_queue,
+                    "skipped": result.skipped,
+                    "returned": 0,
+                }
+                print(json.dumps(output_data, indent=2, default=str))
             else:
                 print("[]")
             return
 
         # Convert to serializable format
-        thread_data = [t.to_dict() for t in threads]
+        thread_data = [t.to_dict() for t in result.threads]
 
         # Output in requested format
         if output == "json":
-            import json
-
-            print(json.dumps(thread_data, indent=2, default=str))
+            output_data = {
+                "threads": thread_data,
+                "total_in_queue": result.total_in_queue,
+                "skipped": result.skipped,
+                "returned": result.returned,
+            }
+            print(json.dumps(output_data, indent=2, default=str))
         elif output == "yaml":
             try:
                 import yaml
 
-                print(yaml.dump(thread_data, default_flow_style=False, allow_unicode=True))
+                output_data = {
+                    "threads": thread_data,
+                    "total_in_queue": result.total_in_queue,
+                    "skipped": result.skipped,
+                    "returned": result.returned,
+                }
+                print(yaml.dump(output_data, default_flow_style=False, allow_unicode=True))
             except ImportError:
                 print_error("PyYAML is required for YAML output. Install with: pip install pyyaml")
                 raise typer.Exit(1)
         else:
             print_error(f"Unsupported output format: {output}")
-            print_info("Supported formats: json, yaml")
+            print_info("Supported formats: json, yaml, summary")
             raise typer.Exit(1)
 
     except FileNotFoundError as e:
@@ -848,6 +875,79 @@ def fetch(
         raise typer.Exit(1)
     except Exception as e:
         print_error(f"Fetch failed: {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(1)
+
+
+@app.command("mark-done")
+def mark_done(
+    thread_ids: str = typer.Option(
+        ..., "--thread-ids", "-t", help="Comma-separated list of thread IDs to mark as done"
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+):
+    """Mark threads as analyzed/done so they won't appear in future fetches.
+
+    This syncs the processing state to AWS. Once marked, these threads
+    will be filtered out by the fetch command.
+
+    Examples:
+
+        geni analyze mark-done --thread-ids "abc123,def456,ghi789"
+    """
+    # Check auth status
+    _require_auth()
+
+    # Suppress logs unless verbose
+    if not verbose:
+        logging.basicConfig(level=logging.ERROR)
+        logging.getLogger("agent").setLevel(logging.ERROR)
+        logging.getLogger("urllib3").setLevel(logging.ERROR)
+
+    try:
+        # Parse thread IDs
+        ids = [tid.strip() for tid in thread_ids.split(",") if tid.strip()]
+        if not ids:
+            print_error("No valid thread IDs provided")
+            raise typer.Exit(1)
+
+        # Load configuration
+        config_manager = ConfigManager()
+        config = config_manager.load()
+
+        # Import required modules
+        from agent.api_clients.integration_client import IntegrationServiceClient
+
+        # Get auth token for API calls
+        auth_token = _get_auth_token()
+
+        # Initialize client
+        integration = IntegrationServiceClient(
+            endpoint=config.aws.integration_endpoint,
+            api_key=config.aws.api_key,
+            auth_token=auth_token,
+        )
+
+        # Mark threads as done
+        result = integration.mark_threads_done(
+            thread_ids=ids,
+            project=config.langsmith.project,
+        )
+
+        if result.get("success"):
+            print_success(f"Marked {len(ids)} thread(s) as analyzed")
+            console.print(f"[dim]Synced to AWS at: {result.get('synced_at', 'unknown')}[/dim]")
+        else:
+            print_error(f"Failed to mark threads as done: {result.get('error', 'unknown error')}")
+            raise typer.Exit(1)
+
+    except FileNotFoundError as e:
+        print_error(str(e))
+        print_info("Run 'geni init' to set up configuration")
+        raise typer.Exit(1)
+    except Exception as e:
+        print_error(f"Mark-done failed: {e}")
         if verbose:
             console.print_exception()
         raise typer.Exit(1)

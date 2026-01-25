@@ -61,6 +61,26 @@ class ThreadData:
         return self._data
 
 
+class FetchResult:
+    """Result of fetching threads, including metadata about filtering."""
+
+    def __init__(
+        self,
+        threads: List[ThreadData],
+        total_in_queue: int,
+        returned: int,
+        skipped: int,
+    ):
+        self.threads = threads
+        self.total_in_queue = total_in_queue
+        self.returned = returned
+        self.skipped = skipped
+
+    @property
+    def has_threads(self) -> bool:
+        return len(self.threads) > 0
+
+
 class IntegrationServiceClient:
     """Client for interacting with the AWS Integration Service.
 
@@ -117,6 +137,111 @@ class IntegrationServiceClient:
             logger.error(f"Failed to fetch thread details for {thread_id}: {e}")
             raise
 
+    def fetch_threads(
+        self,
+        limit: int = 50,
+        with_details: bool = True,
+        progress_callback: Optional[ProgressCallback] = None,
+    ) -> FetchResult:
+        """Fetch annotated threads from LangSmith with filtering metadata.
+
+        Uses a two-step approach to avoid timeouts:
+        1. Fetch summaries only (fast) - AWS filters out previously analyzed threads
+        2. Fetch details for each thread individually
+
+        Args:
+            limit: Maximum threads to return
+            with_details: Whether to include full thread details
+            progress_callback: Optional callback for progress updates
+                               Called with (phase, current, total, thread_id)
+
+        Returns:
+            FetchResult with threads and metadata (total, returned, skipped)
+        """
+        try:
+            # Step 1: Fetch summaries only (fast, never times out)
+            # AWS service automatically filters out previously analyzed threads
+            logger.info(f"Fetching thread summaries (limit={limit})")
+            if progress_callback:
+                progress_callback("summaries", 0, 0, "")
+
+            params = {
+                "limit": limit,
+                "with_details": "false",  # Always get summaries first
+                "skip_processed": "true",  # AWS filters already-analyzed threads
+            }
+
+            response = self._session.get(
+                f"{self.endpoint}/threads/annotated",
+                params=params,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+
+            data = response.json()
+            threads_data = data.get("threads", [])
+            pagination = data.get("pagination", {})
+
+            # Extract filtering stats from AWS response
+            total_in_queue = pagination.get("total", len(threads_data))
+            returned = pagination.get("returned", len(threads_data))
+            skipped = total_in_queue - returned
+
+            logger.info(
+                f"Found {total_in_queue} threads in queue, "
+                f"{skipped} skipped (previously analyzed), "
+                f"{returned} new threads to analyze"
+            )
+
+            if not threads_data:
+                if progress_callback:
+                    progress_callback("complete", 0, 0, "")
+                return FetchResult(
+                    threads=[],
+                    total_in_queue=total_in_queue,
+                    returned=0,
+                    skipped=skipped,
+                )
+
+            # Step 2: If details requested, fetch each thread's details individually
+            threads: List[ThreadData] = []
+            if with_details:
+                logger.info(f"Fetching details for {len(threads_data)} threads one-by-one")
+                if progress_callback:
+                    progress_callback("details", 0, len(threads_data), "")
+
+                for i, thread_summary in enumerate(threads_data):
+                    thread_id = thread_summary.get("thread_id")
+                    if thread_id:
+                        if progress_callback:
+                            progress_callback("details", i + 1, len(threads_data), thread_id)
+                        try:
+                            logger.info(
+                                f"Fetching details {i + 1}/{len(threads_data)}: {thread_id}"
+                            )
+                            thread_details = self.get_thread_details(thread_id)
+                            threads.append(thread_details)
+                        except Exception as e:
+                            logger.warning(f"Failed to get details for thread {thread_id}: {e}")
+                            # Fall back to summary data
+                            threads.append(ThreadData(thread_summary))
+            else:
+                threads = [ThreadData(t) for t in threads_data]
+
+            if progress_callback:
+                progress_callback("complete", len(threads_data), len(threads_data), "")
+
+            return FetchResult(
+                threads=threads,
+                total_in_queue=total_in_queue,
+                returned=returned,
+                skipped=skipped,
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to fetch threads: {e}")
+            raise
+
     def get_annotated_threads(
         self,
         limit: int = 50,
@@ -138,66 +263,59 @@ class IntegrationServiceClient:
         Returns:
             List of thread data objects
         """
-        try:
-            # Step 1: Fetch summaries only (fast, never times out)
-            logger.info(f"Fetching thread summaries (limit={limit})")
-            if progress_callback:
-                progress_callback("summaries", 0, 0, "")
+        result = self.fetch_threads(limit, with_details, progress_callback)
+        return result.threads
 
-            params = {
-                "limit": limit,
-                "with_details": "false",  # Always get summaries first
+    def mark_threads_done(
+        self,
+        thread_ids: List[str],
+        project: str = "default",
+    ) -> Dict[str, Any]:
+        """Mark threads as analyzed/done in AWS.
+
+        Syncs the processing state to AWS so these threads won't be
+        returned in future fetch calls.
+
+        Args:
+            thread_ids: List of thread IDs to mark as done
+            project: Project name for state tracking
+
+        Returns:
+            Sync result from AWS
+        """
+        try:
+            # Build thread state objects
+            from datetime import datetime, timezone
+
+            now = datetime.now(timezone.utc).isoformat()
+            threads = [
+                {
+                    "thread_id": tid,
+                    "status": "processed",
+                    "processed_at": now,
+                    "issues_created": 0,  # Will be updated if tickets are created
+                }
+                for tid in thread_ids
+            ]
+
+            payload = {
+                "project": project,
+                "threads": threads,
             }
 
-            response = self._session.get(
-                f"{self.endpoint}/threads/annotated",
-                params=params,
+            response = self._session.post(
+                f"{self.endpoint}/users/me/state/sync",
+                json=payload,
                 timeout=self.timeout,
             )
             response.raise_for_status()
 
-            data = response.json()
-            threads_data = data.get("threads", [])
-            logger.info(f"Found {len(threads_data)} unprocessed threads")
-
-            if not threads_data:
-                if progress_callback:
-                    progress_callback("complete", 0, 0, "")
-                return []
-
-            # Step 2: If details requested, fetch each thread's details individually
-            if with_details:
-                logger.info(f"Fetching details for {len(threads_data)} threads one-by-one")
-                if progress_callback:
-                    progress_callback("details", 0, len(threads_data), "")
-
-                detailed_threads = []
-                for i, thread_summary in enumerate(threads_data):
-                    thread_id = thread_summary.get("thread_id")
-                    if thread_id:
-                        if progress_callback:
-                            progress_callback("details", i + 1, len(threads_data), thread_id)
-                        try:
-                            logger.info(
-                                f"Fetching details {i + 1}/{len(threads_data)}: {thread_id}"
-                            )
-                            thread_details = self.get_thread_details(thread_id)
-                            detailed_threads.append(thread_details)
-                        except Exception as e:
-                            logger.warning(f"Failed to get details for thread {thread_id}: {e}")
-                            # Fall back to summary data
-                            detailed_threads.append(ThreadData(thread_summary))
-
-                if progress_callback:
-                    progress_callback("complete", len(threads_data), len(threads_data), "")
-                return detailed_threads
-            else:
-                if progress_callback:
-                    progress_callback("complete", len(threads_data), len(threads_data), "")
-                return [ThreadData(t) for t in threads_data]
+            result = response.json()
+            logger.info(f"Marked {len(thread_ids)} threads as done: {result}")
+            return result
 
         except Exception as e:
-            logger.error(f"Failed to fetch threads: {e}")
+            logger.error(f"Failed to mark threads as done: {e}")
             raise
 
     def create_ticket(
