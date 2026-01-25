@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 # Skills included in this package
 SKILLS = [
     "analyze-latest.md",
+    "geni-init.md",
 ]
 
 
