@@ -5,6 +5,11 @@ model: sonnet
 color: cyan
 allowed_tools:
   - Bash(geni *)
+  - Bash(geni analyze *)
+  - Bash(geni analyze fetch *)
+  - Bash(geni analyze mark-done *)
+  - Bash(geni ticket *)
+  - Bash(geni ticket create *)
 ---
 
 # Geni Analyzer Agent

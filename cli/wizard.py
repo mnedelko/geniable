@@ -74,36 +74,37 @@ class ConfigWizard:
         self._install_skills()
 
     def _install_skills(self) -> None:
-        """Install Geniable Claude Code skills and agents."""
+        """Install Geniable Claude Code skills and agents to project directory."""
         from cli.skills import install_agents, install_skills
 
-        console.print("\n[dim]Installing Geniable skills and agents...[/dim]")
+        project_root = Path.cwd()
+        console.print("\n[dim]Installing Geniable skills and agents to project...[/dim]")
 
         try:
-            # Install skills to ~/.claude/commands/
-            skill_results = install_skills(force=True)
+            # Install skills to .claude/commands/ in project
+            skill_results = install_skills(force=True, project_root=project_root)
             skill_installed = [name for name, success in skill_results.items() if success]
             skill_failed = [name for name, success in skill_results.items() if not success]
 
             if skill_installed:
                 console.print(f"[green]✓[/green] Installed {len(skill_installed)} skill(s):")
                 for skill in skill_installed:
-                    console.print(f"  - ~/.claude/commands/{skill}")
+                    console.print(f"  - .claude/commands/{skill}")
 
             if skill_failed:
                 console.print(f"[yellow]![/yellow] Failed to install {len(skill_failed)} skill(s):")
                 for skill in skill_failed:
                     console.print(f"  - {skill}")
 
-            # Install agents to ~/.claude/agents/
-            agent_results = install_agents(force=True)
+            # Install agents to .claude/agents/ in project
+            agent_results = install_agents(force=True, project_root=project_root)
             agent_installed = [name for name, success in agent_results.items() if success]
             agent_failed = [name for name, success in agent_results.items() if not success]
 
             if agent_installed:
                 console.print(f"[green]✓[/green] Installed {len(agent_installed)} agent(s):")
                 for agent in agent_installed:
-                    console.print(f"  - ~/.claude/agents/{agent}")
+                    console.print(f"  - .claude/agents/{agent}")
 
             if agent_failed:
                 console.print(f"[yellow]![/yellow] Failed to install {len(agent_failed)} agent(s):")
@@ -126,13 +127,21 @@ class ConfigWizard:
     def _configure_claude_code_permissions(self) -> None:
         """Configure Claude Code to pre-approve geni commands.
 
-        Updates ~/.claude/settings.json to add 'Bash(geni *)' to allowedTools,
-        so the Geni Analyzer agent can run without permission prompts.
+        Updates .claude/settings.local.json in the project to add geni command permissions
+        to allowedTools, so the Geni Analyzer agent can run without permission prompts.
         """
         import json
 
-        settings_path = Path.home() / ".claude" / "settings.json"
-        geni_permission = "Bash(geni *)"
+        project_root = Path.cwd()
+        settings_path = project_root / ".claude" / "settings.local.json"
+
+        # Permission patterns to allow all geni CLI commands
+        # Pattern format: Bash(prefix*) matches any command starting with prefix
+        geni_permissions = [
+            "Bash(geni *)",              # geni followed by anything
+            "Bash(geni analyze *)",       # geni analyze subcommands
+            "Bash(geni ticket *)",        # geni ticket subcommands
+        ]
 
         try:
             # Load existing settings or create new
@@ -148,25 +157,29 @@ class ConfigWizard:
             elif not isinstance(settings["allowedTools"], list):
                 settings["allowedTools"] = []
 
-            # Add geni permission if not already present
-            if geni_permission not in settings["allowedTools"]:
-                settings["allowedTools"].append(geni_permission)
+            # Add geni permissions if not already present
+            added = []
+            for permission in geni_permissions:
+                if permission not in settings["allowedTools"]:
+                    settings["allowedTools"].append(permission)
+                    added.append(permission)
 
+            if added:
                 # Write back settings
                 settings_path.parent.mkdir(parents=True, exist_ok=True)
                 with open(settings_path, "w") as f:
                     json.dump(settings, f, indent=2)
 
                 console.print(f"[green]✓[/green] Configured Claude Code permissions:")
-                console.print(f"  - Added '{geni_permission}' to ~/.claude/settings.json")
+                console.print(f"  - Added {len(added)} permission(s) to .claude/settings.local.json")
             else:
                 console.print(f"[green]✓[/green] Claude Code permissions already configured")
 
         except Exception as e:
             console.print(f"[yellow]![/yellow] Could not configure Claude Code permissions: {e}")
             console.print(
-                f"[dim]You can manually add '{geni_permission}' to "
-                "~/.claude/settings.json allowedTools[/dim]"
+                "[dim]You can manually add geni permissions to "
+                ".claude/settings.local.json allowedTools[/dim]"
             )
 
     def run(self, skip_validation: bool = False) -> Dict[str, Any]:

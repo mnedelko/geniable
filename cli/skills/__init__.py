@@ -29,18 +29,25 @@ def get_skills_dir() -> Path:
         return skills_path
 
 
-def install_skills(target_dir: Path | None = None, force: bool = False) -> dict[str, bool]:
-    """Install Claude Code skills to the user's commands directory.
+def install_skills(
+    target_dir: Path | None = None,
+    force: bool = False,
+    project_root: Path | None = None,
+) -> dict[str, bool]:
+    """Install Claude Code skills to the project's commands directory.
 
     Args:
-        target_dir: Target directory for skills. Defaults to ~/.claude/commands/
+        target_dir: Target directory for skills. Defaults to .claude/commands/ in project root
         force: Overwrite existing files if True
+        project_root: Project root directory. Defaults to current working directory
 
     Returns:
         Dict mapping skill name to success status
     """
     if target_dir is None:
-        target_dir = Path.home() / ".claude" / "commands"
+        if project_root is None:
+            project_root = Path.cwd()
+        target_dir = project_root / ".claude" / "commands"
 
     # Create target directory if it doesn't exist
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -71,17 +78,23 @@ def install_skills(target_dir: Path | None = None, force: bool = False) -> dict[
     return results
 
 
-def get_installed_skills(target_dir: Path | None = None) -> list[str]:
+def get_installed_skills(
+    target_dir: Path | None = None,
+    project_root: Path | None = None,
+) -> list[str]:
     """Get list of installed Geniable skills.
 
     Args:
-        target_dir: Directory to check. Defaults to ~/.claude/commands/
+        target_dir: Directory to check. Defaults to .claude/commands/ in project root
+        project_root: Project root directory. Defaults to current working directory
 
     Returns:
         List of installed skill names
     """
     if target_dir is None:
-        target_dir = Path.home() / ".claude" / "commands"
+        if project_root is None:
+            project_root = Path.cwd()
+        target_dir = project_root / ".claude" / "commands"
 
     installed = []
     for skill_name in SKILLS:
@@ -91,34 +104,43 @@ def get_installed_skills(target_dir: Path | None = None) -> list[str]:
     return installed
 
 
-def install_agents(target_dir: Path | None = None, force: bool = False) -> dict[str, bool]:
-    """Install Claude Code agents to the user's agents directory.
+def install_agents(
+    target_dir: Path | None = None,
+    force: bool = False,
+    project_root: Path | None = None,
+) -> dict[str, bool]:
+    """Install Claude Code agents to the project's agents directory.
 
     This is a convenience wrapper that imports and calls the agents module.
 
     Args:
-        target_dir: Target directory for agents. Defaults to ~/.claude/agents/
+        target_dir: Target directory for agents. Defaults to .claude/agents/ in project root
         force: Overwrite existing files if True
+        project_root: Project root directory. Defaults to current working directory
 
     Returns:
         Dict mapping agent name to success status
     """
     from cli.agents import install_agents as _install_agents
 
-    return _install_agents(target_dir=target_dir, force=force)
+    return _install_agents(target_dir=target_dir, force=force, project_root=project_root)
 
 
-def get_installed_agents(target_dir: Path | None = None) -> list[str]:
+def get_installed_agents(
+    target_dir: Path | None = None,
+    project_root: Path | None = None,
+) -> list[str]:
     """Get list of installed Geniable agents.
 
     This is a convenience wrapper that imports and calls the agents module.
 
     Args:
-        target_dir: Directory to check. Defaults to ~/.claude/agents/
+        target_dir: Directory to check. Defaults to .claude/agents/ in project root
+        project_root: Project root directory. Defaults to current working directory
 
     Returns:
         List of installed agent names
     """
     from cli.agents import get_installed_agents as _get_installed_agents
 
-    return _get_installed_agents(target_dir=target_dir)
+    return _get_installed_agents(target_dir=target_dir, project_root=project_root)
