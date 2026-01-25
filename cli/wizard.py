@@ -128,19 +128,24 @@ class ConfigWizard:
         """Configure Claude Code to pre-approve geni commands.
 
         Updates .claude/settings.local.json in the project to add geni command permissions
-        to allowedTools, so the Geni Analyzer agent can run without permission prompts.
+        to permissions.allow, so the Geni Analyzer agent can run without permission prompts.
+
+        Claude Code uses colon-based patterns: Bash(command:*) matches any command starting with 'command'.
         """
         import json
 
         project_root = Path.cwd()
         settings_path = project_root / ".claude" / "settings.local.json"
 
-        # Permission patterns to allow all geni CLI commands
-        # Pattern format: Bash(prefix*) matches any command starting with prefix
+        # Permission patterns using Claude Code's colon format
+        # Bash(prefix:*) matches any command starting with 'prefix'
         geni_permissions = [
-            "Bash(geni *)",              # geni followed by anything
-            "Bash(geni analyze *)",       # geni analyze subcommands
-            "Bash(geni ticket *)",        # geni ticket subcommands
+            "Bash(geni:*)",                    # All geni commands
+            "Bash(geni analyze:*)",            # geni analyze subcommands
+            "Bash(geni analyze fetch:*)",      # geni analyze fetch
+            "Bash(geni analyze mark-done:*)",  # geni analyze mark-done
+            "Bash(geni ticket:*)",             # geni ticket subcommands
+            "Bash(geni ticket create:*)",      # geni ticket create
         ]
 
         try:
@@ -151,17 +156,19 @@ class ConfigWizard:
             else:
                 settings = {}
 
-            # Ensure allowedTools exists and is a list
-            if "allowedTools" not in settings:
-                settings["allowedTools"] = []
-            elif not isinstance(settings["allowedTools"], list):
-                settings["allowedTools"] = []
+            # Ensure permissions.allow structure exists
+            if "permissions" not in settings:
+                settings["permissions"] = {}
+            if "allow" not in settings["permissions"]:
+                settings["permissions"]["allow"] = []
+            elif not isinstance(settings["permissions"]["allow"], list):
+                settings["permissions"]["allow"] = []
 
             # Add geni permissions if not already present
             added = []
             for permission in geni_permissions:
-                if permission not in settings["allowedTools"]:
-                    settings["allowedTools"].append(permission)
+                if permission not in settings["permissions"]["allow"]:
+                    settings["permissions"]["allow"].append(permission)
                     added.append(permission)
 
             if added:
@@ -179,7 +186,7 @@ class ConfigWizard:
             console.print(f"[yellow]![/yellow] Could not configure Claude Code permissions: {e}")
             console.print(
                 "[dim]You can manually add geni permissions to "
-                ".claude/settings.local.json allowedTools[/dim]"
+                ".claude/settings.local.json permissions.allow[/dim]"
             )
 
     def run(self, skip_validation: bool = False) -> Dict[str, Any]:

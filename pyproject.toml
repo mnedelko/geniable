@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "geniable"
-version = "2.2.7"
+version = "2.2.8"
 description = "Hybrid Local-Cloud QA Pipeline for LangSmith Thread Analysis"
 readme = "README.md"
 license = "MIT"
