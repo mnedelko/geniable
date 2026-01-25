@@ -110,6 +110,9 @@ class ConfigWizard:
                 for agent in agent_failed:
                     console.print(f"  - {agent}")
 
+            # Configure Claude Code permissions for geni commands
+            self._configure_claude_code_permissions()
+
             console.print("\n[dim]Available: /analyze-latest (uses Geni Analyzer agent)[/dim]")
             console.print(
                 "\n[yellow]Note:[/yellow] If Claude Code is currently running, "
@@ -119,6 +122,52 @@ class ConfigWizard:
         except Exception as e:
             console.print(f"[yellow]![/yellow] Failed to install skills/agents: {e}")
             console.print("[dim]You can install manually later.[/dim]")
+
+    def _configure_claude_code_permissions(self) -> None:
+        """Configure Claude Code to pre-approve geni commands.
+
+        Updates ~/.claude/settings.json to add 'Bash(geni *)' to allowedTools,
+        so the Geni Analyzer agent can run without permission prompts.
+        """
+        import json
+
+        settings_path = Path.home() / ".claude" / "settings.json"
+        geni_permission = "Bash(geni *)"
+
+        try:
+            # Load existing settings or create new
+            if settings_path.exists():
+                with open(settings_path) as f:
+                    settings = json.load(f)
+            else:
+                settings = {}
+
+            # Ensure allowedTools exists and is a list
+            if "allowedTools" not in settings:
+                settings["allowedTools"] = []
+            elif not isinstance(settings["allowedTools"], list):
+                settings["allowedTools"] = []
+
+            # Add geni permission if not already present
+            if geni_permission not in settings["allowedTools"]:
+                settings["allowedTools"].append(geni_permission)
+
+                # Write back settings
+                settings_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(settings_path, "w") as f:
+                    json.dump(settings, f, indent=2)
+
+                console.print(f"[green]✓[/green] Configured Claude Code permissions:")
+                console.print(f"  - Added '{geni_permission}' to ~/.claude/settings.json")
+            else:
+                console.print(f"[green]✓[/green] Claude Code permissions already configured")
+
+        except Exception as e:
+            console.print(f"[yellow]![/yellow] Could not configure Claude Code permissions: {e}")
+            console.print(
+                f"[dim]You can manually add '{geni_permission}' to "
+                "~/.claude/settings.json allowedTools[/dim]"
+            )
 
     def run(self, skip_validation: bool = False) -> Dict[str, Any]:
         """Run the complete wizard flow.
