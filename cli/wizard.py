@@ -74,35 +74,50 @@ class ConfigWizard:
         self._install_skills()
 
     def _install_skills(self) -> None:
-        """Install Geniable Claude Code skills to user's commands directory."""
-        from cli.skills import install_skills
+        """Install Geniable Claude Code skills and agents."""
+        from cli.skills import install_agents, install_skills
 
-        console.print("\n[dim]Installing Geniable skills to ~/.claude/commands/...[/dim]")
+        console.print("\n[dim]Installing Geniable skills and agents...[/dim]")
 
         try:
-            results = install_skills(force=True)
+            # Install skills to ~/.claude/commands/
+            skill_results = install_skills(force=True)
+            skill_installed = [name for name, success in skill_results.items() if success]
+            skill_failed = [name for name, success in skill_results.items() if not success]
 
-            installed = [name for name, success in results.items() if success]
-            failed = [name for name, success in results.items() if not success]
+            if skill_installed:
+                console.print(f"[green]✓[/green] Installed {len(skill_installed)} skill(s):")
+                for skill in skill_installed:
+                    console.print(f"  - ~/.claude/commands/{skill}")
 
-            if installed:
-                console.print(f"[green]✓[/green] Installed {len(installed)} skill(s):")
-                for skill in installed:
+            if skill_failed:
+                console.print(f"[yellow]![/yellow] Failed to install {len(skill_failed)} skill(s):")
+                for skill in skill_failed:
                     console.print(f"  - {skill}")
 
-            if failed:
-                console.print(f"[yellow]![/yellow] Failed to install {len(failed)} skill(s):")
-                for skill in failed:
-                    console.print(f"  - {skill}")
+            # Install agents to ~/.claude/agents/
+            agent_results = install_agents(force=True)
+            agent_installed = [name for name, success in agent_results.items() if success]
+            agent_failed = [name for name, success in agent_results.items() if not success]
 
-            console.print("[dim]Skills available: /analyze-latest[/dim]")
+            if agent_installed:
+                console.print(f"[green]✓[/green] Installed {len(agent_installed)} agent(s):")
+                for agent in agent_installed:
+                    console.print(f"  - ~/.claude/agents/{agent}")
+
+            if agent_failed:
+                console.print(f"[yellow]![/yellow] Failed to install {len(agent_failed)} agent(s):")
+                for agent in agent_failed:
+                    console.print(f"  - {agent}")
+
+            console.print("\n[dim]Available: /analyze-latest (uses Geni Analyzer agent)[/dim]")
             console.print(
                 "\n[yellow]Note:[/yellow] If Claude Code is currently running, "
                 "restart it to detect the new command."
             )
 
         except Exception as e:
-            console.print(f"[yellow]![/yellow] Failed to install skills: {e}")
+            console.print(f"[yellow]![/yellow] Failed to install skills/agents: {e}")
             console.print("[dim]You can install manually later.[/dim]")
 
     def run(self, skip_validation: bool = False) -> Dict[str, Any]:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "geniable"
-version = "2.2.2"
+version = "2.2.3"
 description = "Hybrid Local-Cloud QA Pipeline for LangSmith Thread Analysis"
 readme = "README.md"
 license = "MIT"
@@ -107,6 +107,7 @@ exclude = ["tests*", "docs*"]
 [tool.setuptools.package-data]
 "*" = ["py.typed"]
 "cli.skills" = ["*.md"]
+"cli.agents" = ["*.md"]
 
 # =============================================================================
 # Black Configuration

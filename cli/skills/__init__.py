@@ -1,7 +1,8 @@
-"""Claude Code skills for Geniable.
+"""Claude Code skills and agents for Geniable.
 
 This module contains Claude Code skill files (.md) that define
-custom slash commands for the /analyze-latest workflow.
+custom slash commands, and provides utilities to install both
+skills and agents.
 """
 
 import logging
@@ -88,3 +89,36 @@ def get_installed_skills(target_dir: Path | None = None) -> list[str]:
             installed.append(skill_name)
 
     return installed
+
+
+def install_agents(target_dir: Path | None = None, force: bool = False) -> dict[str, bool]:
+    """Install Claude Code agents to the user's agents directory.
+
+    This is a convenience wrapper that imports and calls the agents module.
+
+    Args:
+        target_dir: Target directory for agents. Defaults to ~/.claude/agents/
+        force: Overwrite existing files if True
+
+    Returns:
+        Dict mapping agent name to success status
+    """
+    from cli.agents import install_agents as _install_agents
+
+    return _install_agents(target_dir=target_dir, force=force)
+
+
+def get_installed_agents(target_dir: Path | None = None) -> list[str]:
+    """Get list of installed Geniable agents.
+
+    This is a convenience wrapper that imports and calls the agents module.
+
+    Args:
+        target_dir: Directory to check. Defaults to ~/.claude/agents/
+
+    Returns:
+        List of installed agent names
+    """
+    from cli.agents import get_installed_agents as _get_installed_agents
+
+    return _get_installed_agents(target_dir=target_dir)
