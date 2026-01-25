@@ -758,7 +758,14 @@ def clear_state(
 @app.command()
 def version():
     """Show version information."""
-    console.print("Geni v2.0.0")
+    from importlib.metadata import version as get_version
+
+    try:
+        pkg_version = get_version("geniable")
+    except Exception:
+        pkg_version = "unknown"
+
+    console.print(f"Geni v{pkg_version}")
     console.print("QA Pipeline for LLM Applications")
 
 
