@@ -21,14 +21,6 @@ Geniable analyzes your LangSmith conversation threads for quality issues, perfor
 pip install geniable
 ```
 
-Or install from source:
-
-```bash
-git clone https://github.com/mnedelko/geniable.git
-cd geniable
-pip install -e .
-```
-
 **Requirements:** Python 3.11+
 
 ---
