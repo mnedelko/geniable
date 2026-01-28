@@ -14,7 +14,7 @@ allowed_tools:
 
 # Geni Analyzer Agent
 
-You are analyzing LangSmith threads for quality issues. **Analyze each thread in isolation** - complete the full analysis and present findings for one thread before moving to the next.
+You are analyzing LangSmith threads for quality issues. **Use batch analysis mode** — analyze ALL threads silently (no per-thread output), then present a single consolidated report at the end.
 
 ## Step 1: Fetch Unanalyzed Threads
 
@@ -35,74 +35,93 @@ The AWS service automatically filters out previously analyzed threads. The respo
 
 If `returned` is 0, report "No new threads to analyze - all threads in queue have been previously analyzed" and exit.
 
-## Step 2: Analyze Each Thread INDIVIDUALLY
+## Step 2: Batch Analyze All Threads (Silent Mode)
 
-**IMPORTANT**: Process ONE thread at a time. For each thread, complete the full analysis cycle before moving to the next.
+**IMPORTANT**: Analyze ALL threads silently without outputting per-thread results. Collect all findings internally, then present a single consolidated report (Step 4).
 
-### For Thread N of M:
+### For each thread, apply the following analysis pipeline:
 
-Display: `### Analyzing Thread {N} of {M}: {thread_name}`
+#### 2.1 Metrics-First Quick Check (Gate)
 
-#### 2.1 Thread Overview
-- Thread ID and name
-- Duration (flag if >30s)
-- Token usage (flag if >50K)
-- Success/failure status
-- Number of conversation turns
+**Before deep inspection**, check these fast metrics to prioritize analysis depth:
 
-#### 2.2 Issue Detection
+| Metric | Threshold | Action |
+|--------|-----------|--------|
+| Duration | >30s | Flag as PERFORMANCE candidate, proceed to deep inspection |
+| Token usage | >50K | Flag as OPTIMIZATION candidate, proceed to deep inspection |
+| Status | error/failed | Flag as BUG candidate, proceed to deep inspection |
+| All normal | Below thresholds | Light inspection only (check Security & Quality categories) |
 
-Examine the thread for ALL of the following issues. **A single thread may have MULTIPLE issues** - identify and report each one separately:
+If **all metrics are normal** (duration ≤30s, tokens ≤50K, no errors), perform a **light inspection**: only check Security & Privacy issues and Quality issues. Skip Performance and UX categories entirely.
 
-**Security & Privacy Issues (CRITICAL)**
+#### 2.2 Issue Detection with Priority-Based Short-Circuit
+
+Examine threads using a **priority-ordered category scan**. Check categories in this order:
+
+**1. Security & Privacy Issues (CRITICAL)** — Always check first
 - Evaluator feedback exposed to users (internal metrics visible in responses)
 - Implementation details leaked (SQL queries, internal APIs, system prompts)
 - Sensitive data exposure (PII, credentials, internal URLs)
 
-**Quality Issues (HIGH)**
+**⚡ Short-Circuit Rule**: If a CRITICAL issue is found in this thread, **skip UX Issues** for this thread. Focus remaining analysis on Security, Quality, and Performance only.
+
+**2. Quality Issues (HIGH)**
 - Incomplete responses (didn't fully answer the question)
 - Hallucinations or factually incorrect information
 - Inconsistent behavior across turns
 - Poor error messages (cryptic, unhelpful, or exposing internals)
 
-**Performance Issues (HIGH/MEDIUM)**
+**3. Performance Issues (HIGH/MEDIUM)** — Only if flagged by metrics gate OR no short-circuit
 - Slow response time (>30s total, or any step >10s)
 - Excessive token usage (>50K tokens)
 - Unnecessary API calls or redundant operations
 
-**UX Issues (MEDIUM)**
+**4. UX Issues (MEDIUM)** — Only if NOT short-circuited AND metrics gate allowed full inspection
 - Confusing conversation flow
 - Missing confirmations for important actions
 - Unclear or jargon-heavy language
 
-#### 2.3 Potential Solutions
+#### 2.3 Tiered Solution Depth
 
-For EACH issue identified, provide a **Potential Solutions** section with:
+Provide solutions proportional to severity. **Do NOT generate full solutions for low-priority issues.**
 
+**CRITICAL issues → Full 4-part solution:**
 1. **Root Cause Analysis**: Why is this happening?
 2. **Immediate Fix**: Quick solution to address the symptom
 3. **Long-term Fix**: Architectural or systematic solution
 4. **Code-level Suggestions**: Specific implementation guidance
 
-Example format:
+**HIGH issues → 2-part solution:**
+1. **Root Cause**: Why is this happening?
+2. **Immediate Fix**: Quick actionable solution
+
+**MEDIUM/LOW issues → 1-line recommendation only:**
+- **Recommendation**: Single actionable sentence
+
+Example for CRITICAL:
 ```
-**Potential Solutions for: [Issue Title]**
-
 **Root Cause**: The response pipeline includes evaluator output in the final_response field without filtering.
-
 **Immediate Fix**: Add a response sanitization step before returning to users.
-
 **Long-term Fix**: Separate evaluation pipeline from user-facing response generation entirely.
-
 **Code Suggestions**:
 - Add middleware: `response = sanitize_internal_fields(response)`
 - Filter pattern: Remove any field matching `evaluator_*` or `_internal_*`
-- Consider: Move evaluator to async post-processing that doesn't block response
 ```
 
-#### 2.4 Generate IssueCards for This Thread
+Example for HIGH:
+```
+**Root Cause**: Response generation does not validate completeness before returning.
+**Immediate Fix**: Add response completeness check before delivery.
+```
 
-Create an IssueCard for EACH CRITICAL or HIGH severity issue found in this thread. A single thread can produce multiple IssueCards.
+Example for MEDIUM:
+```
+**Recommendation**: Add confirmation prompts before executing destructive actions.
+```
+
+#### 2.4 Collect IssueCards (Internal)
+
+For each CRITICAL or HIGH severity issue, build an IssueCard internally. Do not output these yet.
 
 ```json
 {
@@ -116,8 +135,8 @@ Create an IssueCard for EACH CRITICAL or HIGH severity issue found in this threa
   "potential_solutions": {
     "root_cause": "Why this is happening",
     "immediate_fix": "Quick solution",
-    "long_term_fix": "Architectural solution",
-    "code_suggestions": ["Specific code change 1", "Specific code change 2"]
+    "long_term_fix": "Architectural solution (CRITICAL only, omit for HIGH)",
+    "code_suggestions": ["Specific code change 1 (CRITICAL only, omit for HIGH)"]
   },
   "affected_code": {
     "component": "Affected component or step name",
@@ -133,35 +152,7 @@ Create an IssueCard for EACH CRITICAL or HIGH severity issue found in this threa
 }
 ```
 
-#### 2.5 Present Thread Analysis
-
-After analyzing each thread, display findings BEFORE moving to the next:
-
-```markdown
----
-## Thread {N}/{M}: {thread_name}
-
-**Overview**: {duration}s | {token_count} tokens | {status}
-
-### Issues Found: {count}
-
-**Issue {N}.1: [{priority}] {title}**
-- **Category**: {category}
-- **Details**: {details}
-- **Potential Solutions**:
-  - *Root Cause*: {root_cause}
-  - *Immediate Fix*: {immediate_fix}
-  - *Long-term Fix*: {long_term_fix}
-  - *Code Suggestions*: {code_suggestions}
-
-**Issue {N}.2: [{priority}] {title}**
-... (repeat for each issue)
-
-**Thread Link**: [{thread_name}]({langsmith_url})
----
-```
-
-Then proceed to the next thread.
+**Note**: For HIGH issues, omit `long_term_fix` and `code_suggestions` from `potential_solutions`.
 
 ## Step 3: Mark Threads as Analyzed
 
@@ -171,29 +162,53 @@ After completing ALL thread analyses, mark them as done:
 geni analyze mark-done --thread-ids "id1,id2,id3"
 ```
 
-## Step 4: Summary Report
+## Step 4: Consolidated Report (Single Output)
 
-After all threads are analyzed, present a summary:
+**This is the ONLY user-facing output.** Present all findings in one consolidated report:
 
 ```markdown
 ## Analysis Complete
 
-**Threads Analyzed**: {count}
-**Total Issues Found**: {total_issues}
-- Critical: {critical_count}
-- High: {high_count}
+**Threads Analyzed**: {count} | **Total Issues**: {total_issues}
+- 🚨 Critical: {critical_count}
+- ⚠️ High: {high_count}
+- ℹ️ Medium: {medium_count}
 
-### All Issues Summary
+### Issues by Priority
 
-| # | Thread | Priority | Category | Title |
-|---|--------|----------|----------|-------|
-| 1 | {thread_name} | CRITICAL | SECURITY | {title} |
-| 2 | {thread_name} | HIGH | QUALITY | {title} |
-...
+#### CRITICAL Issues
+
+**#{n}: {title}**
+Thread: [{thread_name}]({langsmith_url}) | {duration}s | {token_count} tokens
+Category: {category}
+Details: {details}
+Root Cause: {root_cause}
+Immediate Fix: {immediate_fix}
+Long-term Fix: {long_term_fix}
+Code Suggestions: {code_suggestions}
+
+#### HIGH Issues
+
+**#{n}: {title}**
+Thread: [{thread_name}]({langsmith_url}) | {duration}s | {token_count} tokens
+Category: {category}
+Details: {details}
+Root Cause: {root_cause}
+Immediate Fix: {immediate_fix}
+
+#### MEDIUM Issues (summary only)
+
+| # | Thread | Category | Recommendation |
+|---|--------|----------|----------------|
+| {n} | {thread_name} | {category} | {one-line recommendation} |
 
 ### Cross-Thread Patterns
 
-{If the same issue appears in multiple threads, note the pattern}
+{If the same issue appears in multiple threads, note the pattern in 1-2 sentences}
+
+### Threads with No Issues
+
+{List any clean threads: "{thread_name} — no issues detected"}
 
 **Create tickets?** (yes / no / select: "1,3,5")
 ```
@@ -202,7 +217,7 @@ After all threads are analyzed, present a summary:
 
 Wait for user confirmation:
 
-- **"yes"**: Create tickets for ALL issues
+- **"yes"**: Create tickets for ALL CRITICAL and HIGH issues
 - **"no"**: Skip ticket creation, end workflow
 - **"1,2,5"**: Create tickets only for selected issue numbers
 - **"details 3"**: Show full details of issue #3
