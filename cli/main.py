@@ -84,6 +84,11 @@ from cli.commands.ticket import app as ticket_app
 
 app.add_typer(ticket_app, name="ticket", help="Ticket management commands")
 
+# Add scaffold subcommands
+from cli.commands.scaffold import app as scaffold_app
+
+app.add_typer(scaffold_app, name="new", help="Generate agent project scaffolds")
+
 
 @app.command()
 def init(

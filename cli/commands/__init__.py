@@ -1,5 +1,5 @@
 """CLI command submodules."""
 
-from cli.commands import analyze, ticket
+from cli.commands import analyze, scaffold, ticket
 
-__all__ = ["analyze", "ticket"]
+__all__ = ["analyze", "scaffold", "ticket"]
