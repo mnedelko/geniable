@@ -7,7 +7,7 @@ import typer
 from rich.console import Console
 
 from cli.output_formatter import print_error, print_info, print_success
-from cli.scaffold import IdentityLayerConfig
+from cli.scaffold import IdentityLayerConfig, LangSmithConfig, ToolGovernanceConfig
 
 console = Console()
 app = typer.Typer(help="Generate agent project scaffolds")
@@ -189,6 +189,22 @@ RULES_FOCUS_AREAS = [
 ]
 
 
+TOOL_PROFILE_CHOICES = [
+    questionary.Choice(
+        title="Minimal   — session status only (most restrictive)",
+        value="minimal",
+    ),
+    questionary.Choice(
+        title="Coding    — file, runtime, sessions, memory access",
+        value="coding",
+    ),
+    questionary.Choice(
+        title="Full      — all tools permitted (no restrictions)",
+        value="full",
+    ),
+]
+
+
 def _require_auth() -> None:
     """Require authentication before proceeding."""
     try:
@@ -308,6 +324,62 @@ def _ask_identity_layers() -> IdentityLayerConfig:
     )
 
 
+def _ask_tool_governance() -> ToolGovernanceConfig:
+    """Ask user about tool governance configuration (Principle 9).
+
+    Returns:
+        ToolGovernanceConfig with user selections.
+    """
+    profile = questionary.select(
+        "Tool access profile:",
+        choices=TOOL_PROFILE_CHOICES,
+    ).ask()
+
+    if profile is None:
+        raise typer.Abort()
+
+    sub_agent_restrictions = questionary.confirm(
+        "Enable sub-agent restrictions? (prevent sub-agents from accessing orchestration tools)",
+        default=True,
+    ).ask()
+
+    if sub_agent_restrictions is None:
+        raise typer.Abort()
+
+    return ToolGovernanceConfig(
+        profile=profile,
+        sub_agent_restrictions=sub_agent_restrictions,
+    )
+
+
+def _ask_langsmith(project_name: str) -> LangSmithConfig:
+    """Ask user about LangSmith tracing configuration (Principle 16).
+
+    Returns:
+        LangSmithConfig with user selections.
+    """
+    enable = questionary.confirm(
+        "Enable LangSmith tracing? (Principle 16: Observability)",
+        default=True,
+    ).ask()
+
+    if enable is None:
+        raise typer.Abort()
+
+    if not enable:
+        return LangSmithConfig(enabled=False)
+
+    project = questionary.text(
+        "LangSmith project name:",
+        default=project_name,
+    ).ask()
+
+    if project is None:
+        raise typer.Abort()
+
+    return LangSmithConfig(enabled=True, project=project)
+
+
 @app.command("create")
 def create() -> None:
     """Create a new agent project from a template.
@@ -403,7 +475,11 @@ def create() -> None:
     console.print("\n[cyan]Identity Layers (Principle 3: Separation of Concerns)[/cyan]")
     identity_config = _ask_identity_layers()
 
-    # 8. Output directory
+    # 8. Tool governance (Principle 9)
+    console.print("\n[cyan]Tool Governance (Principle 9: Layered Permissions)[/cyan]")
+    tool_governance_config = _ask_tool_governance()
+
+    # 9. Output directory
     output_dir = questionary.text(
         "Output directory:",
         default=f"./{project_name}",
@@ -411,6 +487,10 @@ def create() -> None:
 
     if output_dir is None:
         raise typer.Abort()
+
+    # 10. LangSmith tracing (Principle 16)
+    console.print("\n[cyan]Observability (Principle 16: LangSmith Tracing)[/cyan]")
+    langsmith_config = _ask_langsmith(project_name)
 
     # Generate
     from cli.scaffold import ScaffoldConfig, ScaffoldGenerator
@@ -424,6 +504,8 @@ def create() -> None:
         fallback_models=fallback_models,
         output_dir=output_dir,
         identity=identity_config,
+        tool_governance=tool_governance_config,
+        langsmith=langsmith_config,
     )
 
     try:

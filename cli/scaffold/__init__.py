@@ -29,6 +29,23 @@ class IdentityLayerConfig:
 
 
 @dataclass
+class ToolGovernanceConfig:
+    """Configuration for Principle 9: Tool Governance."""
+
+    profile: str = "minimal"  # minimal | coding | full
+    deny: list[str] = field(default_factory=list)
+    sub_agent_restrictions: bool = True
+
+
+@dataclass
+class LangSmithConfig:
+    """Configuration for LangSmith tracing (Principle 16: Observability)."""
+
+    enabled: bool = False
+    project: str = ""  # defaults to project_name at generation time
+
+
+@dataclass
 class ProviderModel:
     """A provider + model pair for primary or fallback."""
 
@@ -49,6 +66,8 @@ class ScaffoldConfig:
     output_dir: str
     fallback_models: list[ProviderModel] = field(default_factory=list)
     identity: IdentityLayerConfig = field(default_factory=IdentityLayerConfig)
+    tool_governance: ToolGovernanceConfig = field(default_factory=ToolGovernanceConfig)
+    langsmith: LangSmithConfig = field(default_factory=LangSmithConfig)
 
     def validate(self) -> None:
         """Validate configuration values."""
@@ -131,6 +150,7 @@ class ScaffoldGenerator:
         files = {
             "agent.py": template.render_agent_py(),
             "resilience.py": template.render_resilience_py(),
+            "tool_policy.py": template.render_tool_policy_py(),
             "config.yaml": template.render_config_yaml(),
             "pyproject.toml": template.render_pyproject_toml(),
             "README.md": template.render_readme(),

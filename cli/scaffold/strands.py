@@ -235,26 +235,37 @@ def process_query_tool(query: str) -> str:
 def create_agent():
     \"\"\"Create the Strands agent with configured model and tools.\"\"\"
     from strands import Agent
+    from tool_policy import filter_tools
 
     system_prompt = load_system_prompt()
     model = get_model()
 
+    # Tool Governance (Principle 9): filter tools through policy
+    all_tools = [process_query_tool]
+    tool_names = [t.__name__ for t in all_tools]
+    permitted_names = filter_tools(tool_names)
+    permitted_tools = [t for t in all_tools if t.__name__ in permitted_names]
+
     agent = Agent(
         model=model,
         system_prompt=system_prompt,
-        tools=[process_query_tool],
+        tools=permitted_tools,
     )
     return agent
 """
 
     def render_section_8_entrypoint(self) -> str:
+        langsmith_import = ""
+        langsmith_decorator = ""
+        if self.config.langsmith.enabled:
+            langsmith_import = "from langsmith import traceable\n\n"
+            langsmith_decorator = f'@traceable(name="{self.config.project_name}")\n'
+        main_block = self._render_main_block()
         return f"""\
 # =============================================================================
 # 8. ENTRY POINT
 # =============================================================================
-{_principle_comments(8)}
-
-def run_agent(query: str, context: dict | None = None) -> str:
+{_principle_comments(8)}{langsmith_import}{langsmith_decorator}def run_agent(query: str, context: dict | None = None) -> str:
     \"\"\"Run the agent with a query string.
 
     Args:
@@ -275,18 +286,5 @@ def run_agent(query: str, context: dict | None = None) -> str:
         raise RuntimeError(f"Agent invocation failed: {{e!s}}") from e
 
 
-if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        user_query = " ".join(sys.argv[1:])
-        print(f"Query: {{user_query}}")
-        print("=" * 60)
-        try:
-            result = run_agent(user_query)
-            print(result)
-        except RuntimeError as e:
-            print(f"Error: {{e}}")
-            sys.exit(1)
-    else:
-        print("Usage: python agent.py <query>")
-        sys.exit(1)
+{main_block}
 """

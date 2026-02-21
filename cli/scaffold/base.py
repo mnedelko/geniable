@@ -774,6 +774,336 @@ def load_resilience_config(config_path: Path | None = None) -> dict[str, Any]:
 '''
 
     # ------------------------------------------------------------------
+    # tool_policy.py — Tool Governance (Principle 9)
+    # ------------------------------------------------------------------
+
+    def render_tool_policy_py(self) -> str:
+        """Render the complete tool_policy.py for the generated project.
+
+        Implements Principle 9: Tool Governance — layered permission systems
+        with deny-wins-over-allow logic, tool group selectors, and sub-agent
+        restrictions.
+        """
+        return '''\
+"""Tool Governance — layered permission systems.
+
+Principle 9: Tool Governance — provides:
+- Tool profiles (minimal, coding, full) controlling access levels
+- Deny-wins-over-allow logic as the cardinal safety property
+- Tool group selectors expanding shorthand to concrete tool names
+- Sub-agent restrictions preventing access to orchestration tools
+
+Sections:
+    - Tool Groups (TOOL_GROUPS)
+    - Profiles (PROFILES)
+    - Sub-Agent Restrictions (DEFAULT_SUBAGENT_DENY)
+    - Group Expansion (expand_groups)
+    - Policy Matching (matches_policy)
+    - Config Loading (load_tool_policy)
+    - Tool Filtering (filter_tools)
+    - Validation (validate_tool_config)
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# TOOL GROUPS — shorthand selectors that expand to concrete tool names
+# =============================================================================
+
+TOOL_GROUPS: dict[str, list[str]] = {
+    "group:fs": [
+        "read_file",
+        "write_file",
+        "list_directory",
+        "create_directory",
+        "delete_file",
+        "move_file",
+        "search_files",
+    ],
+    "group:runtime": [
+        "shell_exec",
+        "python_exec",
+        "subprocess_run",
+        "eval_code",
+    ],
+    "group:web": [
+        "http_request",
+        "web_search",
+        "web_fetch",
+        "url_fetch",
+    ],
+    "group:memory": [
+        "memory_read",
+        "memory_write",
+        "memory_search",
+        "memory_delete",
+    ],
+    "group:sessions": [
+        "session_status",
+        "session_list",
+        "session_create",
+        "session_delete",
+    ],
+    "group:messaging": [
+        "send_message",
+        "read_messages",
+        "channel_list",
+        "thread_reply",
+    ],
+}
+
+ALL_GROUP_NAMES = set(TOOL_GROUPS.keys())
+
+
+# =============================================================================
+# PROFILES — named access levels mapping to allowed tool groups
+# =============================================================================
+
+PROFILES: dict[str, list[str]] = {
+    "minimal": ["group:sessions"],
+    "coding": ["group:fs", "group:runtime", "group:sessions", "group:memory"],
+    "full": list(TOOL_GROUPS.keys()),
+}
+
+VALID_PROFILES = set(PROFILES.keys())
+
+
+# =============================================================================
+# SUB-AGENT RESTRICTIONS — hardcoded deny for sub-agents
+# =============================================================================
+
+DEFAULT_SUBAGENT_DENY: list[str] = [
+    "session_create",
+    "session_delete",
+    "send_message",
+    "channel_list",
+    "thread_reply",
+    "memory_delete",
+    "shell_exec",
+]
+
+
+# =============================================================================
+# GROUP EXPANSION
+# =============================================================================
+
+
+def expand_groups(items: list[str]) -> list[str]:
+    """Expand group selectors (e.g. 'group:fs') into concrete tool names.
+
+    Items that are not group selectors are passed through unchanged.
+
+    Args:
+        items: List of tool names and/or group selectors.
+
+    Returns:
+        Flat list of concrete tool names.
+    """
+    result: list[str] = []
+    for item in items:
+        if item.startswith("group:") and item in TOOL_GROUPS:
+            result.extend(TOOL_GROUPS[item])
+        else:
+            result.append(item)
+    return result
+
+
+# =============================================================================
+# POLICY MATCHING — deny-wins-over-allow (cardinal safety property)
+# =============================================================================
+
+
+def matches_policy(tool_name: str, allow_list: list[str], deny_list: list[str]) -> bool:
+    """Check if a tool is permitted by the policy.
+
+    The cardinal safety property: deny is checked FIRST.
+    If a tool appears in both allow and deny, it is DENIED.
+
+    Args:
+        tool_name: Name of the tool to check.
+        allow_list: Expanded list of allowed tool names.
+        deny_list: Expanded list of denied tool names.
+
+    Returns:
+        True if the tool is permitted, False otherwise.
+    """
+    # Deny wins over allow — always check deny first
+    if tool_name in deny_list:
+        return False
+
+    # If allow list is empty, nothing is allowed
+    if not allow_list:
+        return False
+
+    return tool_name in allow_list
+
+
+# =============================================================================
+# CONFIG LOADING
+# =============================================================================
+
+
+def load_tool_policy(config_path: Path | None = None) -> dict[str, Any]:
+    """Load the tool governance section from config.yaml.
+
+    Args:
+        config_path: Path to config.yaml. Defaults to ./config.yaml.
+
+    Returns:
+        Dict with keys: profile, allow, deny, sub_agent_restrictions.
+    """
+    if config_path is None:
+        config_path = Path(__file__).parent / "config.yaml"
+
+    if not config_path.exists():
+        logger.warning("Config file not found: %s — using minimal profile", config_path)
+        return {
+            "profile": "minimal",
+            "allow": expand_groups(PROFILES["minimal"]),
+            "deny": [],
+            "sub_agent_restrictions": True,
+        }
+
+    import yaml
+
+    with open(config_path) as f:
+        full_config = yaml.safe_load(f) or {}
+
+    tools_section = full_config.get("tools", {})
+    profile_name = tools_section.get("profile", "minimal")
+    deny_raw = tools_section.get("deny", [])
+    sub_agent_restrictions = tools_section.get("sub_agent_restrictions", True)
+
+    # Expand profile groups into concrete allow list
+    profile_groups = PROFILES.get(profile_name, PROFILES["minimal"])
+    allow = expand_groups(profile_groups)
+
+    # Expand any group selectors in the deny list
+    deny = expand_groups(deny_raw)
+
+    return {
+        "profile": profile_name,
+        "allow": allow,
+        "deny": deny,
+        "sub_agent_restrictions": sub_agent_restrictions,
+    }
+
+
+# =============================================================================
+# TOOL FILTERING — public API
+# =============================================================================
+
+
+def filter_tools(
+    tools: list[str],
+    config_path: Path | None = None,
+    is_subagent: bool = False,
+) -> list[str]:
+    """Filter a tool list through the governance policy.
+
+    This is the main public API. Pass your list of tool names and get back
+    only the ones permitted by the current profile, deny list, and
+    sub-agent restrictions.
+
+    Args:
+        tools: List of tool names to filter.
+        config_path: Path to config.yaml. Defaults to ./config.yaml.
+        is_subagent: If True, apply additional sub-agent restrictions.
+
+    Returns:
+        Filtered list of permitted tool names.
+    """
+    policy = load_tool_policy(config_path)
+    allow = policy["allow"]
+    deny = list(policy["deny"])  # copy to avoid mutating cached policy
+
+    # Apply sub-agent restrictions if applicable
+    if is_subagent and policy.get("sub_agent_restrictions", True):
+        deny.extend(DEFAULT_SUBAGENT_DENY)
+
+    permitted = [t for t in tools if matches_policy(t, allow, deny)]
+
+    logger.info(
+        "Tool governance: profile=%s permitted=%d/%d denied=%d",
+        policy["profile"],
+        len(permitted),
+        len(tools),
+        len(tools) - len(permitted),
+    )
+
+    return permitted
+
+
+# =============================================================================
+# VALIDATION
+# =============================================================================
+
+
+def validate_tool_config(config_path: Path | None = None) -> list[str]:
+    """Validate the tool governance configuration.
+
+    Checks:
+    - Profile name is valid (minimal, coding, full)
+    - Deny list entries are valid tool names or group selectors
+
+    Args:
+        config_path: Path to config.yaml. Defaults to ./config.yaml.
+
+    Returns:
+        List of validation error strings (empty if valid).
+    """
+    if config_path is None:
+        config_path = Path(__file__).parent / "config.yaml"
+
+    if not config_path.exists():
+        return [f"Config file not found: {config_path}"]
+
+    import yaml
+
+    with open(config_path) as f:
+        full_config = yaml.safe_load(f) or {}
+
+    tools_section = full_config.get("tools", {})
+    errors: list[str] = []
+
+    # Validate profile name
+    profile_name = tools_section.get("profile", "minimal")
+    if profile_name not in VALID_PROFILES:
+        errors.append(
+            f"Invalid profile '{profile_name}': must be one of {sorted(VALID_PROFILES)}"
+        )
+
+    # Validate deny list entries
+    deny_raw = tools_section.get("deny", [])
+    if not isinstance(deny_raw, list):
+        errors.append(f"'deny' must be a list, got {type(deny_raw).__name__}")
+    else:
+        all_known_tools = set()
+        for group_tools in TOOL_GROUPS.values():
+            all_known_tools.update(group_tools)
+
+        for item in deny_raw:
+            if item.startswith("group:") and item not in ALL_GROUP_NAMES:
+                errors.append(
+                    f"Unknown group selector '{item}': must be one of {sorted(ALL_GROUP_NAMES)}"
+                )
+            # Individual tool names are not validated — allow custom tools
+
+    if errors:
+        for err in errors:
+            logger.warning("Tool config validation: %s", err)
+
+    return errors
+'''
+
+    # ------------------------------------------------------------------
     # Support files
     # ------------------------------------------------------------------
 
@@ -829,14 +1159,21 @@ agent:
 
 {resilience_section}
 tools:
-  profile: "minimal"
-  # deny: ["shell_exec"]
+  profile: "{self.config.tool_governance.profile}"
+  deny: {self._render_deny_list()}
+  sub_agent_restrictions: {str(self.config.tool_governance.sub_agent_restrictions).lower()}
+  # Per-provider overrides (most-specific-wins):
+  # byProvider:
+  #   anthropic/claude-sonnet-4:
+  #     alsoAllow: ["group:web"]
+  #   openai:
+  #     deny: ["shell_exec"]
 
 operational:
   max_iterations: 10
   timeout_seconds: 120
   log_level: "INFO"
-{self._render_identity_config_yaml()}"""
+{self._render_langsmith_config_yaml()}{self._render_identity_config_yaml()}"""
 
     def render_pyproject_toml(self) -> str:
         deps = ['    "pydantic>=2.0.0"', '    "pyyaml>=6.0.0"']
@@ -851,6 +1188,9 @@ operational:
             deps.append('    "google-genai>=1.0.0"')
         if "ollama" in providers:
             deps.append('    "ollama>=0.4.0"')
+
+        if self.config.langsmith.enabled:
+            deps.append('    "langsmith>=0.1.0"')
 
         for d in self.framework_dependencies:
             deps.append(f'    "{d}"')
@@ -938,6 +1278,7 @@ make run
 {self.config.project_name}/
     agent.py                 # Main agent — 8-section architecture
     resilience.py            # Fallback cascades + auth rotation (Principle 5)
+    tool_policy.py           # Tool governance — layered permissions (Principle 9)
     prompts/
         system_prompt.md     # Externalized system prompt
     config.yaml              # Agent configuration with resilience section
@@ -984,6 +1325,17 @@ This project includes a complete resilience module (`resilience.py`) that provid
 
 Configure fallback models in `config.yaml` under the `resilience` section.
 
+## Tool Governance (Principle 9)
+
+This project includes a tool policy module (`tool_policy.py`) that provides:
+
+- **Tool profiles** — minimal, coding, or full access levels
+- **Deny-wins-over-allow** — denied tools are always blocked, regardless of profile
+- **Tool group selectors** — `group:fs`, `group:runtime`, etc. expand to concrete tools
+- **Sub-agent restrictions** — hardcoded deny list prevents sub-agents from accessing orchestration tools
+
+Configure tool access in `config.yaml` under the `tools` section.
+{self._render_readme_langsmith()}
 ## Design Principles
 
 This project is built on 20 agent engineering principles for production systems:
@@ -1003,7 +1355,9 @@ Key settings:
 - **resilience.auth.profiles** — Per-provider authentication configuration
 - **resilience.auth.cooldowns** — Cooldown tier configuration
 - **tools.profile** — Tool access level (minimal/coding/full)
-- **operational.max_iterations** — Tool loop iteration limit
+- **tools.deny** — Explicit deny list (always wins over allow)
+- **tools.sub_agent_restrictions** — Enable sub-agent tool restrictions
+- **operational.max_iterations** — Tool loop iteration limit{self._render_readme_langsmith_config_line()}
 """
 
     def render_makefile(self) -> str:
@@ -1018,7 +1372,7 @@ format:
 \tisort .
 
 typecheck:
-\tmypy agent.py resilience.py
+\tmypy agent.py resilience.py tool_policy.py
 
 test:
 \tpytest tests/ -v
@@ -1065,6 +1419,16 @@ clean:
             lines.extend([
                 "# Ollama",
                 "OLLAMA_BASE_URL=http://localhost:11434",
+                "",
+            ])
+
+        if self.config.langsmith.enabled:
+            lines.extend([
+                "# LangSmith Tracing (Principle 16)",
+                "# LANGCHAIN_TRACING_V2 is set automatically by the --dev flag",
+                "LANGCHAIN_API_KEY=lsv2_...",
+                f"LANGCHAIN_PROJECT={self.config.langsmith.project}",
+                "# LANGCHAIN_ENDPOINT=https://api.smith.langchain.com",
                 "",
             ])
 
@@ -1169,6 +1533,31 @@ class TestResilienceSyntax:
             assert expected in class_names, f"{{expected}} class not found in resilience.py"
 
 
+TOOL_POLICY_FILE = Path(__file__).parent.parent / "tool_policy.py"
+
+
+class TestToolPolicySyntax:
+    \"\"\"Verify generated tool_policy.py is syntactically valid Python.\"\"\"
+
+    def test_tool_policy_file_exists(self):
+        assert TOOL_POLICY_FILE.exists(), f"tool_policy.py not found at {{TOOL_POLICY_FILE}}"
+
+    def test_tool_policy_parses(self):
+        \"\"\"Ensure tool_policy.py is valid Python syntax.\"\"\"
+        source = TOOL_POLICY_FILE.read_text()
+        ast.parse(source)
+
+    def test_tool_policy_has_key_functions(self):
+        \"\"\"Verify tool_policy.py contains all required functions.\"\"\"
+        source = TOOL_POLICY_FILE.read_text()
+        tree = ast.parse(source)
+        func_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        ]
+        for expected in ["expand_groups", "matches_policy", "filter_tools", "validate_tool_config"]:
+            assert expected in func_names, f"{{expected}} function not found in tool_policy.py"
+
+
 class TestConfig:
     \"\"\"Verify configuration loads.\"\"\"
 
@@ -1181,11 +1570,150 @@ class TestConfig:
         ]
         assert "Config" in class_names, "Config class not found in agent.py"
         assert "EvaluatorOutput" in class_names, "EvaluatorOutput class not found"
-"""
+{self._render_test_tracing()}"""
+
+    # ------------------------------------------------------------------
+    # Tool governance helpers
+    # ------------------------------------------------------------------
+
+    def _render_deny_list(self) -> str:
+        """Render the deny list for config.yaml."""
+        deny = self.config.tool_governance.deny
+        if not deny:
+            return "[]"
+        items = ", ".join(f'"{d}"' for d in deny)
+        return f"[{items}]"
 
     # ------------------------------------------------------------------
     # Identity layer rendering (Principle 3)
     # ------------------------------------------------------------------
+
+    def _render_main_block(self) -> str:
+        """Render the if __name__ == '__main__' block.
+
+        When LangSmith is enabled, adds --dev flag parsing that sets
+        LANGCHAIN_TRACING_V2=true at runtime.
+        """
+        if self.config.langsmith.enabled:
+            return '''\
+if __name__ == "__main__":
+    import os
+
+    _dev = "--dev" in sys.argv
+    _args = [a for a in sys.argv[1:] if a != "--dev"]
+    if _dev:
+        os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    if _args:
+        user_query = " ".join(_args)
+        print(f"Query: {user_query}")
+        print("=" * 60)
+        try:
+            result = run_agent(user_query)
+            print(result)
+        except RuntimeError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+    else:
+        print("Usage: python agent.py [--dev] <query>")
+        sys.exit(1)'''
+        return '''\
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        user_query = " ".join(sys.argv[1:])
+        print(f"Query: {user_query}")
+        print("=" * 60)
+        try:
+            result = run_agent(user_query)
+            print(result)
+        except RuntimeError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+    else:
+        print("Usage: python agent.py <query>")
+        sys.exit(1)'''
+
+    def _render_test_tracing(self) -> str:
+        """Render tracing test class for generated test_agent.py, or empty string."""
+        if not self.config.langsmith.enabled:
+            return ""
+        return """
+
+class TestTracingSetup:
+    \"\"\"Verify LangSmith tracing is configured.\"\"\"
+
+    def test_agent_has_traceable_decorator(self):
+        source = AGENT_FILE.read_text()
+        assert "@traceable" in source
+
+    def test_agent_imports_langsmith(self):
+        source = AGENT_FILE.read_text()
+        assert "from langsmith" in source
+
+    def test_agent_has_dev_flag(self):
+        \"\"\"Tracing is activated via --dev flag.\"\"\"
+        source = AGENT_FILE.read_text()
+        assert "--dev" in source
+        assert "LANGCHAIN_TRACING_V2" in source
+"""
+
+    def _render_readme_langsmith_config_line(self) -> str:
+        """Render the tracing config bullet for README, or empty string."""
+        if not self.config.langsmith.enabled:
+            return ""
+        return "\n- **tracing.project** — LangSmith project name for trace grouping"
+
+    def _render_readme_langsmith(self) -> str:
+        """Render the Observability section for README, or empty string."""
+        if not self.config.langsmith.enabled:
+            return ""
+        return f"""
+## Observability (Principle 16)
+
+This project includes LangSmith tracing for production observability.
+All agent invocations are traced and visible in the
+[LangSmith Studio](https://smith.langchain.com) dashboard.
+
+Tracing is **opt-in at runtime** via the `--dev` flag to avoid overhead in production.
+
+### Setup
+
+1. Get your API key from [LangSmith](https://smith.langchain.com)
+2. Set environment variables in `.env`:
+   ```
+   LANGCHAIN_API_KEY=lsv2_your_key_here
+   LANGCHAIN_PROJECT={self.config.langsmith.project}
+   ```
+
+### Usage
+
+```bash
+# Run with tracing enabled (dev/debug)
+python agent.py --dev "your query here"
+
+# Run without tracing (production)
+python agent.py "your query here"
+```
+
+The `--dev` flag sets `LANGCHAIN_TRACING_V2=true` at runtime.
+You can also set this env var directly for CI/CD or always-on tracing.
+
+### Configuration
+
+Edit `config.yaml` under the `tracing` section.
+"""
+
+    def _render_langsmith_config_yaml(self) -> str:
+        """Render the tracing section of config.yaml, or empty string."""
+        if not self.config.langsmith.enabled:
+            return ""
+        return f"""
+tracing:
+  enabled: true
+  provider: "langsmith"
+  project: "{self.config.langsmith.project}"
+  # Activated at runtime with --dev flag (or LANGCHAIN_TRACING_V2=true)
+  # endpoint: "https://api.smith.langchain.com"
+"""
 
     def _render_identity_config_yaml(self) -> str:
         """Render the identity section of config.yaml, or empty string."""
@@ -1305,10 +1833,12 @@ def assemble_brief_packet(mode: str = "full") -> str:
             sections.append("""\
 ## Tool Governance
 
-- Only use tools that are explicitly permitted in the current session
+- Only use tools permitted by the active profile in `tool_policy.py`
+- Deny-wins-over-allow: denied tools are always blocked, regardless of profile
 - Request user confirmation before executing destructive operations
 - Log every tool invocation with parameters and results
-- Respect rate limits and resource quotas for external services
+- Respect sub-agent restrictions — sub-agents cannot access orchestration tools
+- Review `config.yaml` tools section for current permissions
 """)
 
         if "data_privacy" in focus:

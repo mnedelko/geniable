@@ -6,7 +6,14 @@ from unittest.mock import patch
 
 import pytest
 
-from cli.scaffold import IdentityLayerConfig, ProviderModel, ScaffoldConfig, ScaffoldGenerator
+from cli.scaffold import (
+    IdentityLayerConfig,
+    LangSmithConfig,
+    ProviderModel,
+    ScaffoldConfig,
+    ScaffoldGenerator,
+    ToolGovernanceConfig,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -17,6 +24,7 @@ FRAMEWORKS = ["langgraph", "strands", "pi"]
 EXPECTED_FILES = [
     "agent.py",
     "resilience.py",
+    "tool_policy.py",
     "config.yaml",
     "pyproject.toml",
     "README.md",
@@ -33,6 +41,8 @@ def _make_config(
     tmp_path: Path | None = None,
     fallbacks: list[ProviderModel] | None = None,
     identity: IdentityLayerConfig | None = None,
+    tool_governance: ToolGovernanceConfig | None = None,
+    langsmith: LangSmithConfig | None = None,
 ) -> ScaffoldConfig:
     output_dir = str(tmp_path / "test-agent") if tmp_path else "./test-agent"
     return ScaffoldConfig(
@@ -47,6 +57,8 @@ def _make_config(
         fallback_models=fallbacks or [],
         output_dir=output_dir,
         identity=identity or IdentityLayerConfig(),
+        tool_governance=tool_governance or ToolGovernanceConfig(),
+        langsmith=langsmith or LangSmithConfig(),
     )
 
 
@@ -90,6 +102,18 @@ def _make_multi_provider_config(
             ProviderModel(provider="ollama", model_id="llama3.2"),
         ],
         output_dir=output_dir,
+    )
+
+
+def _make_langsmith_config(
+    framework: str = "langgraph",
+    tmp_path: Path | None = None,
+) -> ScaffoldConfig:
+    """Create a config with LangSmith tracing enabled."""
+    return _make_config(
+        framework=framework,
+        tmp_path=tmp_path,
+        langsmith=LangSmithConfig(enabled=True, project="test-project"),
     )
 
 
@@ -970,3 +994,541 @@ class TestWizardIdentityFlow:
             mock_q.confirm.return_value.ask.return_value = None
             with pytest.raises(Abort):
                 _ask_identity_layers()
+
+
+# ---------------------------------------------------------------------------
+# Tool Governance Config (Principle 9)
+# ---------------------------------------------------------------------------
+
+
+class TestToolGovernanceConfig:
+    """Test ToolGovernanceConfig dataclass."""
+
+    def test_defaults(self) -> None:
+        config = ToolGovernanceConfig()
+        assert config.profile == "minimal"
+        assert config.deny == []
+        assert config.sub_agent_restrictions is True
+
+    def test_custom_profile(self) -> None:
+        config = ToolGovernanceConfig(profile="coding")
+        assert config.profile == "coding"
+
+    def test_custom_deny_list(self) -> None:
+        config = ToolGovernanceConfig(deny=["shell_exec", "delete_file"])
+        assert config.deny == ["shell_exec", "delete_file"]
+
+    def test_scaffold_config_default_tool_governance(self) -> None:
+        """ScaffoldConfig should have minimal tool governance by default."""
+        config = _make_config()
+        assert config.tool_governance.profile == "minimal"
+        assert config.tool_governance.deny == []
+        assert config.tool_governance.sub_agent_restrictions is True
+
+
+# ---------------------------------------------------------------------------
+# Tool Policy generation
+# ---------------------------------------------------------------------------
+
+
+class TestToolPolicyGeneration:
+    """Test render_tool_policy_py() produces valid Python with required components."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tool_policy_is_valid_python(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        template = generator._get_template()
+        source = template.render_tool_policy_py()
+        ast.parse(source)
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tool_policy_has_tool_groups(self, framework: str) -> None:
+        config = _make_config(framework)
+        template = ScaffoldGenerator(config)._get_template()
+        source = template.render_tool_policy_py()
+        assert "TOOL_GROUPS" in source
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tool_policy_has_profiles(self, framework: str) -> None:
+        config = _make_config(framework)
+        template = ScaffoldGenerator(config)._get_template()
+        source = template.render_tool_policy_py()
+        assert "PROFILES" in source
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tool_policy_has_subagent_deny(self, framework: str) -> None:
+        config = _make_config(framework)
+        template = ScaffoldGenerator(config)._get_template()
+        source = template.render_tool_policy_py()
+        assert "DEFAULT_SUBAGENT_DENY" in source
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tool_policy_has_key_functions(self, framework: str) -> None:
+        config = _make_config(framework)
+        template = ScaffoldGenerator(config)._get_template()
+        source = template.render_tool_policy_py()
+        tree = ast.parse(source)
+        func_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        ]
+        for expected in [
+            "expand_groups", "matches_policy", "filter_tools",
+            "validate_tool_config", "load_tool_policy",
+        ]:
+            assert expected in func_names, f"{expected} not found in tool_policy.py"
+
+
+# ---------------------------------------------------------------------------
+# Config YAML tool governance section
+# ---------------------------------------------------------------------------
+
+
+class TestConfigYamlToolGovernance:
+    """Test config.yaml contains correct tool governance settings."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_config_yaml_has_profile(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        config_yaml = (output_path / "config.yaml").read_text()
+        assert 'profile: "minimal"' in config_yaml
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_config_yaml_has_deny(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        config_yaml = (output_path / "config.yaml").read_text()
+        assert "deny:" in config_yaml
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_config_yaml_has_sub_agent_restrictions(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        config_yaml = (output_path / "config.yaml").read_text()
+        assert "sub_agent_restrictions:" in config_yaml
+
+    def test_config_yaml_reflects_custom_profile(self, tmp_path: Path) -> None:
+        config = _make_config(
+            "langgraph", tmp_path,
+            tool_governance=ToolGovernanceConfig(profile="coding"),
+        )
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        config_yaml = (output_path / "config.yaml").read_text()
+        assert 'profile: "coding"' in config_yaml
+
+    def test_config_yaml_reflects_custom_deny(self, tmp_path: Path) -> None:
+        config = _make_config(
+            "langgraph", tmp_path,
+            tool_governance=ToolGovernanceConfig(deny=["shell_exec"]),
+        )
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        config_yaml = (output_path / "config.yaml").read_text()
+        assert '["shell_exec"]' in config_yaml
+
+
+# ---------------------------------------------------------------------------
+# Tool Governance framework integration
+# ---------------------------------------------------------------------------
+
+
+class TestToolGovernanceFrameworkIntegration:
+    """Test each framework's section 6 includes tool governance integration."""
+
+    def test_strands_section_6_has_filter_tools(self) -> None:
+        config = _make_config("strands")
+        template = ScaffoldGenerator(config)._get_template()
+        source = template.render_section_6_graph()
+        assert "from tool_policy import filter_tools" in source
+
+    def test_pi_section_6_has_filter_tools(self) -> None:
+        config = _make_config("pi")
+        template = ScaffoldGenerator(config)._get_template()
+        source = template.render_section_6_graph()
+        assert "from tool_policy import filter_tools" in source
+
+    def test_langgraph_section_6_has_tool_policy_comment(self) -> None:
+        config = _make_config("langgraph")
+        template = ScaffoldGenerator(config)._get_template()
+        source = template.render_section_6_graph()
+        assert "tool_policy" in source
+
+
+# ---------------------------------------------------------------------------
+# Section 6 with tool governance (full agent.py validation)
+# ---------------------------------------------------------------------------
+
+
+class TestSection6WithToolGovernance:
+    """Test each framework's section 6 output includes tool governance."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_py_valid_python_with_tool_governance(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        ast.parse(agent_source)
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_py_references_tool_policy(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        assert "tool_policy" in agent_source
+
+
+# ---------------------------------------------------------------------------
+# Generator tool_policy.py file
+# ---------------------------------------------------------------------------
+
+
+class TestGeneratorToolPolicyFile:
+    """Test generate() creates tool_policy.py in output dir."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tool_policy_file_created(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        assert (output_path / "tool_policy.py").exists()
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tool_policy_file_is_valid_python(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        source = (output_path / "tool_policy.py").read_text()
+        ast.parse(source)
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tool_policy_has_6_groups(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        source = (output_path / "tool_policy.py").read_text()
+        for group in ["group:fs", "group:runtime", "group:web", "group:memory", "group:sessions", "group:messaging"]:
+            assert group in source, f"Missing tool group: {group}"
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tool_policy_has_3_profiles(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        source = (output_path / "tool_policy.py").read_text()
+        for profile in ["minimal", "coding", "full"]:
+            assert f'"{profile}"' in source, f"Missing profile: {profile}"
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tool_policy_deny_wins_over_allow(self, framework: str, tmp_path: Path) -> None:
+        """Verify matches_policy checks deny first (structural guarantee)."""
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        source = (output_path / "tool_policy.py").read_text()
+        # The deny check must appear before the allow check in matches_policy
+        deny_pos = source.index("if tool_name in deny_list")
+        allow_pos = source.index("return tool_name in allow_list")
+        assert deny_pos < allow_pos, "Deny must be checked before allow"
+
+
+# ---------------------------------------------------------------------------
+# Wizard tool governance flow
+# ---------------------------------------------------------------------------
+
+
+class TestWizardToolGovernanceFlow:
+    """Test _ask_tool_governance with mocked questionary."""
+
+    def test_tool_governance_defaults(self) -> None:
+        from cli.commands.scaffold import _ask_tool_governance
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.select.return_value.ask.return_value = "minimal"
+            mock_q.confirm.return_value.ask.return_value = True
+            result = _ask_tool_governance()
+            assert result.profile == "minimal"
+            assert result.sub_agent_restrictions is True
+
+    def test_tool_governance_coding_profile(self) -> None:
+        from cli.commands.scaffold import _ask_tool_governance
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.select.return_value.ask.return_value = "coding"
+            mock_q.confirm.return_value.ask.return_value = False
+            result = _ask_tool_governance()
+            assert result.profile == "coding"
+            assert result.sub_agent_restrictions is False
+
+    def test_tool_governance_abort_on_none(self) -> None:
+        from click.exceptions import Abort
+
+        from cli.commands.scaffold import _ask_tool_governance
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.select.return_value.ask.return_value = None
+            with pytest.raises(Abort):
+                _ask_tool_governance()
+
+
+# ---------------------------------------------------------------------------
+# LangSmith Config (Principle 16)
+# ---------------------------------------------------------------------------
+
+
+class TestLangSmithConfig:
+    """Test LangSmithConfig dataclass."""
+
+    def test_defaults(self) -> None:
+        config = LangSmithConfig()
+        assert config.enabled is False
+        assert config.project == ""
+
+    def test_enabled_with_project(self) -> None:
+        config = LangSmithConfig(enabled=True, project="my-project")
+        assert config.enabled is True
+        assert config.project == "my-project"
+
+    def test_scaffold_config_default_langsmith(self) -> None:
+        """ScaffoldConfig should have LangSmith disabled by default."""
+        config = _make_config()
+        assert config.langsmith.enabled is False
+        assert config.langsmith.project == ""
+
+
+# ---------------------------------------------------------------------------
+# LangSmith .env.example
+# ---------------------------------------------------------------------------
+
+
+class TestLangSmithEnvExample:
+    """Test .env.example includes LangSmith vars when enabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_env_has_langchain_vars_when_enabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_langsmith_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        env = (output_path / ".env.example").read_text()
+        assert "LANGCHAIN_TRACING_V2" in env  # referenced in --dev flag comment
+        assert "LANGCHAIN_API_KEY" in env
+        assert "LANGCHAIN_PROJECT=test-project" in env
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_env_no_langchain_vars_when_disabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        env = (output_path / ".env.example").read_text()
+        assert "LANGCHAIN_TRACING_V2" not in env
+        assert "LANGCHAIN_API_KEY" not in env
+        assert "LANGCHAIN_PROJECT" not in env
+
+
+# ---------------------------------------------------------------------------
+# LangSmith config.yaml
+# ---------------------------------------------------------------------------
+
+
+class TestLangSmithConfigYaml:
+    """Test config.yaml includes tracing section when enabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_config_yaml_has_tracing_when_enabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_langsmith_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        config_yaml = (output_path / "config.yaml").read_text()
+        assert "tracing:" in config_yaml
+        assert 'provider: "langsmith"' in config_yaml
+        assert 'project: "test-project"' in config_yaml
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_config_yaml_no_tracing_when_disabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        config_yaml = (output_path / "config.yaml").read_text()
+        assert "tracing:" not in config_yaml
+
+
+# ---------------------------------------------------------------------------
+# LangSmith pyproject.toml
+# ---------------------------------------------------------------------------
+
+
+class TestLangSmithPyproject:
+    """Test pyproject.toml includes langsmith dep when enabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_pyproject_has_langsmith_when_enabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_langsmith_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        pyproject = (output_path / "pyproject.toml").read_text()
+        assert "langsmith" in pyproject
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_pyproject_no_langsmith_when_disabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        pyproject = (output_path / "pyproject.toml").read_text()
+        assert "langsmith" not in pyproject
+
+
+# ---------------------------------------------------------------------------
+# LangSmith agent.py integration
+# ---------------------------------------------------------------------------
+
+
+class TestLangSmithAgentIntegration:
+    """Test agent.py contains @traceable and langsmith import when enabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_has_traceable_when_enabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_langsmith_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        assert "@traceable" in agent_source
+        assert "from langsmith import traceable" in agent_source
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_no_traceable_when_disabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        assert "@traceable" not in agent_source
+        assert "from langsmith" not in agent_source
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_py_valid_python_with_langsmith(self, framework: str, tmp_path: Path) -> None:
+        """Verify generated agent.py with LangSmith is syntactically valid Python."""
+        config = _make_langsmith_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        ast.parse(agent_source)
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_readme_has_observability_when_enabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_langsmith_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        readme = (output_path / "README.md").read_text()
+        assert "Observability" in readme
+        assert "LangSmith" in readme
+        assert "tracing.project" in readme
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_has_dev_flag_when_enabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_langsmith_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        assert '"--dev"' in agent_source
+        assert "LANGCHAIN_TRACING_V2" in agent_source
+        assert "[--dev]" in agent_source  # usage message
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_no_dev_flag_when_disabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        assert "--dev" not in agent_source
+        assert "LANGCHAIN_TRACING_V2" not in agent_source
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_readme_no_observability_section_when_disabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        readme = (output_path / "README.md").read_text()
+        assert "## Observability" not in readme
+        assert "tracing.project" not in readme
+
+
+# ---------------------------------------------------------------------------
+# Wizard LangSmith flow
+# ---------------------------------------------------------------------------
+
+
+class TestWizardLangSmithFlow:
+    """Test _ask_langsmith with mocked questionary."""
+
+    def test_langsmith_enabled(self) -> None:
+        from cli.commands.scaffold import _ask_langsmith
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.confirm.return_value.ask.return_value = True
+            mock_q.text.return_value.ask.return_value = "my-project"
+            result = _ask_langsmith("my-project")
+            assert result.enabled is True
+            assert result.project == "my-project"
+
+    def test_langsmith_disabled(self) -> None:
+        from cli.commands.scaffold import _ask_langsmith
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.confirm.return_value.ask.return_value = False
+            result = _ask_langsmith("my-project")
+            assert result.enabled is False
+
+    def test_langsmith_abort_on_none_confirm(self) -> None:
+        from click.exceptions import Abort
+
+        from cli.commands.scaffold import _ask_langsmith
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.confirm.return_value.ask.return_value = None
+            with pytest.raises(Abort):
+                _ask_langsmith("my-project")
+
+    def test_langsmith_abort_on_none_project(self) -> None:
+        from click.exceptions import Abort
+
+        from cli.commands.scaffold import _ask_langsmith
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.confirm.return_value.ask.return_value = True
+            mock_q.text.return_value.ask.return_value = None
+            with pytest.raises(Abort):
+                _ask_langsmith("my-project")

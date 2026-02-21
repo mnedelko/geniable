@@ -269,17 +269,31 @@ def build_graph():
 
 def create_agent():
     \"\"\"Create and compile the agent.\"\"\"
+    # Tool Governance (Principle 9): When adding tools, filter through tool_policy:
+    #   from tool_policy import filter_tools
+    #   permitted = filter_tools(["tool_a", "tool_b"])
+    #   llm = llm.bind_tools(permitted)
     return build_graph().compile()
 """
 
     def render_section_8_entrypoint(self) -> str:
+        langsmith_import = ""
+        langsmith_decorator = ""
+        langsmith_comment = ""
+        if self.config.langsmith.enabled:
+            langsmith_import = "from langsmith import traceable\n\n"
+            langsmith_decorator = f'@traceable(name="{self.config.project_name}")\n'
+            langsmith_comment = (
+                "\n# LangSmith tracing: LangChain calls are auto-traced via LANGCHAIN_TRACING_V2.\n"
+                "# The @traceable decorator adds a top-level span wrapping the full execution.\n"
+                "# Tracing is activated at runtime with the --dev flag.\n"
+            )
+        main_block = self._render_main_block()
         return f"""\
 # =============================================================================
 # 8. ENTRY POINT
 # =============================================================================
-{_principle_comments(8)}
-
-def run_agent(query: str, context: dict | None = None) -> str:
+{_principle_comments(8)}{langsmith_import}{langsmith_decorator}def run_agent(query: str, context: dict | None = None) -> str:
     \"\"\"Run the agent with a query string.
 
     Args:
@@ -306,18 +320,5 @@ def run_agent(query: str, context: dict | None = None) -> str:
     return final_state.get("response", "")
 
 
-if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        user_query = " ".join(sys.argv[1:])
-        print(f"Query: {{user_query}}")
-        print("=" * 60)
-        try:
-            result = run_agent(user_query)
-            print(result)
-        except RuntimeError as e:
-            print(f"Error: {{e}}")
-            sys.exit(1)
-    else:
-        print("Usage: python agent.py <query>")
-        sys.exit(1)
-"""
+{main_block}
+{langsmith_comment}"""
