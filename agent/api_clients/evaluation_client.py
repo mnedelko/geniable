@@ -1,11 +1,11 @@
 """Client for the AWS Evaluation Service."""
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import requests
 
-from agent.models.evaluation import EvaluationRequest, EvaluationResponse, SingleEvaluationRequest
+from agent.models.evaluation import EvaluationResponse
 from agent.models.mcp import MCPDiscoveryResponse, MCPToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -20,8 +20,8 @@ class EvaluationServiceClient:
     def __init__(
         self,
         endpoint: str,
-        api_key: Optional[str] = None,
-        auth_token: Optional[str] = None,
+        api_key: str | None = None,
+        auth_token: str | None = None,
         timeout: int = 30,
     ):
         """Initialize the client.
@@ -43,9 +43,9 @@ class EvaluationServiceClient:
         self._session.headers["Content-Type"] = "application/json"
 
         # Cached tools
-        self._tools: Optional[Dict[str, MCPToolDefinition]] = None
+        self._tools: dict[str, MCPToolDefinition] | None = None
 
-    def discover_tools(self, force_refresh: bool = False) -> List[MCPToolDefinition]:
+    def discover_tools(self, force_refresh: bool = False) -> list[MCPToolDefinition]:
         """Discover available evaluation tools.
 
         Args:
@@ -77,7 +77,7 @@ class EvaluationServiceClient:
             logger.error(f"Failed to discover tools: {e}")
             raise
 
-    def get_tool(self, name: str) -> Optional[MCPToolDefinition]:
+    def get_tool(self, name: str) -> MCPToolDefinition | None:
         """Get a specific tool definition.
 
         Args:
@@ -89,13 +89,15 @@ class EvaluationServiceClient:
         if self._tools is None:
             self.discover_tools()
 
+        if self._tools is None:
+            return None
         return self._tools.get(name)
 
     def execute_evaluation(
         self,
         thread_id: str,
         tool_name: str,
-        input_data: Dict[str, Any],
+        input_data: dict[str, Any],
     ) -> EvaluationResponse:
         """Execute a single evaluation.
 
@@ -115,7 +117,7 @@ class EvaluationServiceClient:
     def execute_batch(
         self,
         thread_id: str,
-        evaluations: List[Dict[str, Any]],
+        evaluations: list[dict[str, Any]],
     ) -> EvaluationResponse:
         """Execute multiple evaluations in a batch.
 
@@ -149,7 +151,7 @@ class EvaluationServiceClient:
     def execute_all(
         self,
         thread_id: str,
-        thread_data: Dict[str, Any],
+        thread_data: dict[str, Any],
     ) -> EvaluationResponse:
         """Execute all available evaluations on a thread.
 
@@ -181,8 +183,8 @@ class EvaluationServiceClient:
         return self.execute_batch(thread_id, evaluations)
 
     def _build_tool_input(
-        self, tool: MCPToolDefinition, thread_data: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+        self, tool: MCPToolDefinition, thread_data: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Build input for a tool based on thread data.
 
         Args:

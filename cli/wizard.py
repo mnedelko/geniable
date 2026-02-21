@@ -2,13 +2,13 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import questionary
 from rich.console import Console
 
 from cli.claude_code_setup import ClaudeCodeSetup
-from cli.service_validator import ServiceValidator, ValidationResult
+from cli.service_validator import ServiceValidator
 from cli.validators import validate_api_key, validate_email, validate_project_key, validate_url
 
 console = Console()
@@ -34,10 +34,10 @@ class ConfigWizard:
 
     def __init__(self) -> None:
         """Initialize the wizard."""
-        self.config: Dict[str, Any] = {}
-        self._user_email: Optional[str] = None
-        self._user_id: Optional[str] = None
-        self._id_token: Optional[str] = None
+        self.config: dict[str, Any] = {}
+        self._user_email: str | None = None
+        self._user_id: str | None = None
+        self._id_token: str | None = None
 
     def _load_auth_context(self) -> None:
         """Load authentication context from current session.
@@ -159,9 +159,7 @@ class ConfigWizard:
             # Ensure permissions.allow structure exists
             if "permissions" not in settings:
                 settings["permissions"] = {}
-            if "allow" not in settings["permissions"]:
-                settings["permissions"]["allow"] = []
-            elif not isinstance(settings["permissions"]["allow"], list):
+            if "allow" not in settings["permissions"] or not isinstance(settings["permissions"]["allow"], list):
                 settings["permissions"]["allow"] = []
 
             # Add geni permissions if not already present
@@ -177,10 +175,10 @@ class ConfigWizard:
                 with open(settings_path, "w") as f:
                     json.dump(settings, f, indent=2)
 
-                console.print(f"[green]✓[/green] Configured Claude Code permissions:")
+                console.print("[green]✓[/green] Configured Claude Code permissions:")
                 console.print(f"  - Added {len(added)} permission(s) to .claude/settings.local.json")
             else:
-                console.print(f"[green]✓[/green] Claude Code permissions already configured")
+                console.print("[green]✓[/green] Claude Code permissions already configured")
 
         except Exception as e:
             console.print(f"[yellow]![/yellow] Could not configure Claude Code permissions: {e}")
@@ -189,7 +187,7 @@ class ConfigWizard:
                 ".claude/settings.local.json permissions.allow[/dim]"
             )
 
-    def run(self, skip_validation: bool = False) -> Dict[str, Any]:
+    def run(self, skip_validation: bool = False) -> dict[str, Any]:
         """Run the complete wizard flow.
 
         Args:

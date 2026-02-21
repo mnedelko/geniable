@@ -14,9 +14,9 @@ It coordinates all components to:
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal, cast
 
 from agent.api_clients.evaluation_client import EvaluationServiceClient
 from agent.api_clients.integration_client import (
@@ -30,7 +30,7 @@ from agent.mcp_client import MCPClient
 from agent.models.evaluation import EvaluationResponse
 from agent.report_generator import ReportGenerator
 from agent.state_manager import StateManager
-from shared.models.issue_card import AffectedCode, EvaluationResult, IssueCard, Sources
+from shared.models.issue_card import EvaluationResult, IssueCard, Sources
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +42,13 @@ class AgentConfig:
         self,
         integration_endpoint: str,
         evaluation_endpoint: str,
-        api_key: Optional[str] = None,
-        auth_token: Optional[str] = None,
+        api_key: str | None = None,
+        auth_token: str | None = None,
         provider: str = "jira",
-        report_dir: Path = None,
+        report_dir: Path | None = None,
         project: str = "default",
-        jira_project_key: Optional[str] = None,
-        notion_database_id: Optional[str] = None,
+        jira_project_key: str | None = None,
+        notion_database_id: str | None = None,
         cloud_sync_enabled: bool = False,
         cloud_sync_mode: Literal["immediate", "batch", "manual"] = "immediate",
         ci_mode: bool = False,
@@ -74,9 +74,9 @@ class AnalysisResult:
         self,
         thread: ThreadData,
         evaluation: EvaluationResponse,
-        issue_card: Optional[IssueCard] = None,
-        ticket_id: Optional[str] = None,
-        report_path: Optional[str] = None,
+        issue_card: IssueCard | None = None,
+        ticket_id: str | None = None,
+        report_path: str | None = None,
     ):
         self.thread = thread
         self.evaluation = evaluation
@@ -140,7 +140,7 @@ class Agent:
         )
 
         # Initialize cloud sync client if enabled
-        self._cloud_sync: Optional[CloudSyncClient] = None
+        self._cloud_sync: CloudSyncClient | None = None
         if config.cloud_sync_enabled:
             self._cloud_sync = CloudSyncClient(
                 endpoint=config.integration_endpoint,
@@ -149,7 +149,7 @@ class Agent:
             )
             logger.info(f"Cloud sync enabled with mode: {config.cloud_sync_mode}")
 
-    def discover_tools(self) -> List[str]:
+    def discover_tools(self) -> list[str]:
         """Discover available evaluation tools.
 
         Returns:
@@ -161,8 +161,8 @@ class Agent:
     def fetch_threads(
         self,
         limit: int = 50,
-        progress_callback: Optional[ProgressCallback] = None,
-    ) -> List[ThreadData]:
+        progress_callback: ProgressCallback | None = None,
+    ) -> list[ThreadData]:
         """Fetch annotated threads from the Integration Service.
 
         Args:
@@ -215,6 +215,7 @@ class Agent:
         """
         # Determine priority based on evaluation scores
         min_score = min(r.score for r in evaluation.results) if evaluation.results else 1.0
+        priority: Literal["CRITICAL", "HIGH", "MEDIUM", "LOW"]
         if min_score < 0.3:
             priority = "CRITICAL"
         elif min_score < 0.5:
@@ -226,6 +227,10 @@ class Agent:
 
         # Determine category from failing evaluations
         failing = [r for r in evaluation.results if r.status in ("fail", "warning")]
+        category: Literal[
+            "BUG", "PERFORMANCE", "OPTIMIZATION", "FEATURE_IDEA", "DOCUMENTATION",
+            "UI_UX", "TECHNICAL_DEBT", "ERROR", "QUALITY", "SECURITY",
+        ]
         if any("error" in r.tool.lower() for r in failing):
             category = "BUG"
         elif any("latency" in r.tool.lower() or "token" in r.tool.lower() for r in failing):
@@ -283,7 +288,7 @@ class Agent:
             evaluation_results=[
                 EvaluationResult(
                     tool=r.tool,
-                    status=r.status,
+                    status=cast(Literal["pass", "warning", "fail", "error"], r.status),
                     score=r.score,
                     message=r.message,
                 )
@@ -291,7 +296,7 @@ class Agent:
             ],
         )
 
-    def create_ticket(self, issue_card: IssueCard) -> Optional[Dict[str, Any]]:
+    def create_ticket(self, issue_card: IssueCard) -> dict[str, Any] | None:
         """Create a ticket for an issue card.
 
         Args:
@@ -343,8 +348,8 @@ class Agent:
         dry_run: bool = False,
         skip_processed: bool = True,
         force_reprocess: bool = False,
-        progress_callback: Optional[ProgressCallback] = None,
-    ) -> Dict[str, Any]:
+        progress_callback: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
         """Run the complete analysis workflow.
 
         Args:
@@ -403,8 +408,8 @@ class Agent:
             }
 
         # Analyze each thread and generate individual reports
-        results: List[AnalysisResult] = []
-        report_paths: List[str] = []
+        results: list[AnalysisResult] = []
+        report_paths: list[str] = []
 
         for thread in threads_to_process:
             try:
@@ -440,16 +445,18 @@ class Agent:
         total_issues_synced = 0
 
         for result in results:
-            ticket_ids = []
-            ticket_urls = []
+            ticket_ids: list[str] = []
+            ticket_urls: list[str] = []
             jira_tickets_for_report = []
             notion_tickets_for_report = []
 
             if result.issue_card and create_tickets and not dry_run:
                 ticket_response = self.create_ticket(result.issue_card)
                 if ticket_response:
-                    ticket_id = ticket_response.get("issue_key") or ticket_response.get("issue_id")
-                    ticket_url = ticket_response.get("issue_url", "")
+                    ticket_id = str(
+                        ticket_response.get("issue_key") or ticket_response.get("issue_id") or ""
+                    )
+                    ticket_url = str(ticket_response.get("issue_url", ""))
                     provider = ticket_response.get("provider", self.config.provider)
 
                     result.ticket_id = ticket_id
@@ -510,7 +517,7 @@ class Agent:
                         thread_id=result.thread.thread_id,
                         name=result.thread.name,
                         status="success",
-                        processed_at=datetime.now(timezone.utc).isoformat(),
+                        processed_at=datetime.now(UTC).isoformat(),
                         issues_created=result.issues_count,
                         jira_issue_ids=jira_ids,
                         jira_issue_urls=jira_urls,
@@ -553,7 +560,7 @@ class Agent:
         logger.info(f"Run complete: {summary}")
         return summary
 
-    def get_processing_stats(self) -> Dict[str, Any]:
+    def get_processing_stats(self) -> dict[str, Any]:
         """Get statistics about processed threads.
 
         Returns:
@@ -566,7 +573,7 @@ class Agent:
         self._state.clear_state()
         logger.info("Processing state cleared")
 
-    def sync_to_cloud(self) -> Dict[str, Any]:
+    def sync_to_cloud(self) -> dict[str, Any]:
         """Manually sync processing state to cloud.
 
         This method can be called when cloud_sync_mode is set to 'manual'
@@ -583,7 +590,7 @@ class Agent:
         logger.info(f"Manual cloud sync result: {result}")
         return result
 
-    def get_cloud_state(self) -> Dict[str, Any]:
+    def get_cloud_state(self) -> dict[str, Any]:
         """Get current state from cloud.
 
         Returns:

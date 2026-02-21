@@ -1,6 +1,6 @@
 """Evaluation request/response models."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -9,14 +9,14 @@ class SingleEvaluationRequest(BaseModel):
     """Single evaluation tool request."""
 
     tool: str
-    input: Dict[str, Any]
+    input: dict[str, Any]
 
 
 class EvaluationRequest(BaseModel):
     """Batch evaluation request."""
 
     thread_id: str
-    evaluations: List[SingleEvaluationRequest]
+    evaluations: list[SingleEvaluationRequest]
 
 
 class EvaluationResult(BaseModel):
@@ -25,10 +25,10 @@ class EvaluationResult(BaseModel):
     tool: str
     status: str
     score: float
-    message: Optional[str] = None
+    message: str | None = None
     execution_time_ms: int = 0
-    error: Optional[str] = None
-    details: Optional[Dict[str, Any]] = None
+    error: str | None = None
+    details: dict[str, Any] | None = None
 
 
 class EvaluationSummary(BaseModel):
@@ -47,5 +47,5 @@ class EvaluationResponse(BaseModel):
     thread_id: str
     execution_id: str
     timestamp: str
-    results: List[EvaluationResult] = Field(default_factory=list)
+    results: list[EvaluationResult] = Field(default_factory=list)
     summary: EvaluationSummary = Field(default_factory=EvaluationSummary)

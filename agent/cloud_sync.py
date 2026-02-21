@@ -5,7 +5,7 @@ which stores it in DynamoDB for cross-session persistence and status queries.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import requests
 
@@ -22,7 +22,7 @@ class CloudSyncClient:
     def __init__(
         self,
         endpoint: str,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         timeout: int = 30,
         enabled: bool = True,
     ):
@@ -50,14 +50,14 @@ class CloudSyncClient:
         status: str,
         processed_at: str,
         issues_created: int = 0,
-        jira_issue_ids: Optional[List[str]] = None,
-        jira_issue_urls: Optional[List[str]] = None,
-        notion_issue_ids: Optional[List[str]] = None,
-        notion_issue_urls: Optional[List[str]] = None,
-        documentation_path: Optional[str] = None,
-        analysis_summary: Optional[str] = None,
-        error_message: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        jira_issue_ids: list[str] | None = None,
+        jira_issue_urls: list[str] | None = None,
+        notion_issue_ids: list[str] | None = None,
+        notion_issue_urls: list[str] | None = None,
+        documentation_path: str | None = None,
+        analysis_summary: str | None = None,
+        error_message: str | None = None,
+    ) -> dict[str, Any]:
         """Sync a single thread's analysis result to AWS.
 
         Args:
@@ -105,7 +105,7 @@ class CloudSyncClient:
                 timeout=self.timeout,
             )
             response.raise_for_status()
-            result = response.json()
+            result: dict[str, Any] = response.json()
             logger.info(f"Synced thread {thread_id} to AWS")
             return result
 
@@ -113,7 +113,7 @@ class CloudSyncClient:
             logger.warning(f"Failed to sync thread {thread_id} to AWS: {e}")
             return {"success": False, "error": str(e)}
 
-    def sync_full_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def sync_full_state(self, state: dict[str, Any]) -> dict[str, Any]:
         """Sync full project processing state to AWS.
 
         Args:
@@ -137,7 +137,7 @@ class CloudSyncClient:
                 timeout=self.timeout,
             )
             response.raise_for_status()
-            result = response.json()
+            result: dict[str, Any] = response.json()
             logger.info(f"Synced full state for project {state.get('project', 'unknown')} to AWS")
             return result
 
@@ -145,7 +145,7 @@ class CloudSyncClient:
             logger.warning(f"Failed to sync full state to AWS: {e}")
             return {"success": False, "error": str(e)}
 
-    def get_aws_state(self, project: str = "default") -> Dict[str, Any]:
+    def get_aws_state(self, project: str = "default") -> dict[str, Any]:
         """Get current state from AWS.
 
         Args:
@@ -165,13 +165,14 @@ class CloudSyncClient:
                 timeout=self.timeout,
             )
             response.raise_for_status()
-            return response.json()
+            result: dict[str, Any] = response.json()
+            return result
 
         except Exception as e:
             logger.warning(f"Failed to get AWS state: {e}")
             return {"error": str(e)}
 
-    def get_thread_state(self, thread_id: str) -> Optional[Dict[str, Any]]:
+    def get_thread_state(self, thread_id: str) -> dict[str, Any] | None:
         """Get a specific thread's state from AWS.
 
         Args:
@@ -192,7 +193,8 @@ class CloudSyncClient:
             if response.status_code == 404:
                 return None
             response.raise_for_status()
-            return response.json()
+            result: dict[str, Any] = response.json()
+            return result
 
         except Exception as e:
             logger.warning(f"Failed to get thread state from AWS: {e}")

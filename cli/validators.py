@@ -2,7 +2,6 @@
 
 import re
 from pathlib import Path
-from typing import Optional
 
 
 def validate_url(url: str) -> bool:
@@ -39,7 +38,7 @@ def validate_email(email: str) -> bool:
     return bool(pattern.match(email))
 
 
-def validate_api_key(key: str, prefix: Optional[str] = None) -> bool:
+def validate_api_key(key: str, prefix: str | None = None) -> bool:
     """Validate an API key format.
 
     Args:

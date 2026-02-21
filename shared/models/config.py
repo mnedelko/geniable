@@ -6,7 +6,7 @@ the ~/.geniable.yaml config file or environment variables.
 
 import os
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -25,7 +25,7 @@ class AWSConfig(BaseModel):
     region: str = Field(default="us-east-1", description="AWS region")
     integration_endpoint: str = Field(..., description="Integration Service API endpoint URL")
     evaluation_endpoint: str = Field(..., description="Evaluation Service API endpoint URL")
-    api_key: Optional[str] = Field(default=None, description="API Gateway API key")
+    api_key: str | None = Field(default=None, description="API Gateway API key")
 
 
 class JiraConfig(BaseModel):
@@ -52,7 +52,7 @@ class AnthropicConfig(BaseModel):
     in CI/CD environments.
     """
 
-    api_key: Optional[str] = Field(
+    api_key: str | None = Field(
         default=None,
         description="Anthropic API key (can also use ANTHROPIC_API_KEY env var)",
     )
@@ -111,20 +111,20 @@ class AppConfig(BaseModel):
     provider: Literal["jira", "notion", "none"] = Field(
         default="jira", description="Issue tracking provider"
     )
-    jira: Optional[JiraConfig] = Field(
+    jira: JiraConfig | None = Field(
         default=None, description="Jira config (required if provider=jira)"
     )
-    notion: Optional[NotionConfig] = Field(
+    notion: NotionConfig | None = Field(
         default=None, description="Notion config (required if provider=notion)"
     )
-    anthropic: Optional[AnthropicConfig] = Field(
+    anthropic: AnthropicConfig | None = Field(
         default=None, description="Anthropic config for LLM-powered reports (--ci flag)"
     )
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
 
     @field_validator("jira", mode="before")
     @classmethod
-    def validate_jira_config(cls, v, info):
+    def validate_jira_config(cls, v: Any, info: Any) -> Any:
         """Validate Jira config is present when provider is jira."""
         # This is called before the model is fully constructed
         # Full validation happens in model_validator
@@ -132,7 +132,7 @@ class AppConfig(BaseModel):
 
     @field_validator("notion", mode="before")
     @classmethod
-    def validate_notion_config(cls, v, info):
+    def validate_notion_config(cls, v: Any, info: Any) -> Any:
         """Validate Notion config is present when provider is notion."""
         return v
 

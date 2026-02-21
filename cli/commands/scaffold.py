@@ -7,6 +7,7 @@ import typer
 from rich.console import Console
 
 from cli.output_formatter import print_error, print_info, print_success
+from cli.scaffold import IdentityLayerConfig
 
 console = Console()
 app = typer.Typer(help="Generate agent project scaffolds")
@@ -94,6 +95,99 @@ API_KEY_PROVIDERS = {
     "google": "GOOGLE_API_KEY",
 }
 
+# Identity layer choices (Principle 3: Separation of Identity Concerns)
+IDENTITY_LAYERS = [
+    questionary.Choice(
+        title="Operational Rules  — core instructions and constraints",
+        value="rules",
+        checked=True,
+    ),
+    questionary.Choice(
+        title="Personality        — voice, tone, communication style",
+        value="personality",
+        checked=True,
+    ),
+    questionary.Choice(
+        title="Public Identity    — name, bio, presentation",
+        value="identity",
+        checked=True,
+    ),
+    questionary.Choice(
+        title="Tool Guidance      — tool usage tips and workflows",
+        value="tools",
+        checked=True,
+    ),
+    questionary.Choice(
+        title="User Context       — user preferences and history",
+        value="user",
+        checked=True,
+    ),
+    questionary.Choice(
+        title="Persistent Memory  — long-term notes and observations",
+        value="memory",
+        checked=True,
+    ),
+    questionary.Choice(
+        title="Bootstrap          — one-time setup instructions",
+        value="bootstrap",
+        checked=True,
+    ),
+    questionary.Choice(
+        title="Scheduled Duties   — periodic task definitions",
+        value="duties",
+        checked=True,
+    ),
+]
+
+PERSONALITY_PRESETS = [
+    questionary.Choice(
+        title="Professional  — formal, precise, business-appropriate",
+        value="professional",
+    ),
+    questionary.Choice(
+        title="Friendly      — warm, conversational, approachable",
+        value="friendly",
+    ),
+    questionary.Choice(
+        title="Technical     — detailed, specification-oriented, exact",
+        value="technical",
+    ),
+    questionary.Choice(
+        title="Concise       — minimal, direct, no fluff",
+        value="concise",
+    ),
+    questionary.Choice(
+        title="Custom        — blank template for manual editing",
+        value="custom",
+    ),
+]
+
+RULES_FOCUS_AREAS = [
+    questionary.Choice(
+        title="Safety           — prevent harmful outputs",
+        value="safety",
+        checked=True,
+    ),
+    questionary.Choice(
+        title="Tool Governance  — permission-based tool usage",
+        value="tool_governance",
+        checked=True,
+    ),
+    questionary.Choice(
+        title="Data Privacy     — PII handling and data protection",
+        value="data_privacy",
+    ),
+    questionary.Choice(
+        title="Output Quality   — structured, evidence-based responses",
+        value="output_quality",
+        checked=True,
+    ),
+    questionary.Choice(
+        title="Error Handling   — graceful degradation and reporting",
+        value="error_handling",
+    ),
+]
+
 
 def _require_auth() -> None:
     """Require authentication before proceeding."""
@@ -159,6 +253,59 @@ def _ask_provider_model(prompt_prefix: str = "Primary") -> tuple[str, str, str] 
             return None
 
     return provider, model_id, api_key
+
+
+def _ask_identity_layers() -> IdentityLayerConfig:
+    """Ask user about identity layer configuration (Principle 3).
+
+    Returns:
+        IdentityLayerConfig with user selections.
+    """
+    enable = questionary.confirm(
+        "Enable identity layers? (Principle 3: Separation of Identity Concerns)",
+        default=True,
+    ).ask()
+
+    if enable is None:
+        raise typer.Abort()
+
+    if not enable:
+        return IdentityLayerConfig(enabled=False)
+
+    layers = questionary.checkbox(
+        "Select identity layers:",
+        choices=IDENTITY_LAYERS,
+    ).ask()
+
+    if layers is None:
+        raise typer.Abort()
+
+    personality_preset = "professional"
+    if "personality" in layers:
+        personality_preset = questionary.select(
+            "Personality preset:",
+            choices=PERSONALITY_PRESETS,
+        ).ask()
+
+        if personality_preset is None:
+            raise typer.Abort()
+
+    rules_focus: list[str] = ["safety", "tool_governance", "output_quality"]
+    if "rules" in layers:
+        rules_focus = questionary.checkbox(
+            "Rules focus areas:",
+            choices=RULES_FOCUS_AREAS,
+        ).ask()
+
+        if rules_focus is None:
+            raise typer.Abort()
+
+    return IdentityLayerConfig(
+        enabled=True,
+        layers=layers,
+        personality_preset=personality_preset,
+        rules_focus=rules_focus,
+    )
 
 
 @app.command("create")
@@ -252,7 +399,11 @@ def create() -> None:
             )
         )
 
-    # 7. Output directory
+    # 7. Identity layers (Principle 3)
+    console.print("\n[cyan]Identity Layers (Principle 3: Separation of Concerns)[/cyan]")
+    identity_config = _ask_identity_layers()
+
+    # 8. Output directory
     output_dir = questionary.text(
         "Output directory:",
         default=f"./{project_name}",
@@ -272,6 +423,7 @@ def create() -> None:
         primary_model=primary_model,
         fallback_models=fallback_models,
         output_dir=output_dir,
+        identity=identity_config,
     )
 
     try:

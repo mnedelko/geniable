@@ -14,10 +14,9 @@ import json
 import logging
 import os
 import re
-from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Protocol
 
 from agent.models.evaluation import EvaluationResponse
 
@@ -27,7 +26,7 @@ logger = logging.getLogger(__name__)
 class LLMClient(Protocol):
     """Protocol for LLM clients used in report generation."""
 
-    def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def generate(self, prompt: str, system_prompt: str | None = None) -> str:
         """Generate a response from the LLM.
 
         Args:
@@ -43,7 +42,7 @@ class LLMClient(Protocol):
 class AnthropicLLMClient:
     """LLM client using Anthropic's Claude API."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "claude-sonnet-4-20250514"):
+    def __init__(self, api_key: str | None = None, model: str = "claude-sonnet-4-20250514"):
         """Initialize the Anthropic client.
 
         Args:
@@ -52,9 +51,9 @@ class AnthropicLLMClient:
         """
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self.model = model
-        self._client = None
+        self._client: Any = None
 
-    def _get_client(self):
+    def _get_client(self) -> Any:
         """Lazy initialization of the Anthropic client."""
         if self._client is None:
             try:
@@ -68,7 +67,7 @@ class AnthropicLLMClient:
                 )
         return self._client
 
-    def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+    def generate(self, prompt: str, system_prompt: str | None = None) -> str:
         """Generate a response using Claude.
 
         Args:
@@ -90,7 +89,7 @@ class AnthropicLLMClient:
             messages=messages,
         )
 
-        return response.content[0].text
+        return str(response.content[0].text)
 
 
 class ReportGenerator:
@@ -108,9 +107,9 @@ class ReportGenerator:
 
     def __init__(
         self,
-        output_dir: Path = None,
-        project_context: Optional[Dict[str, Any]] = None,
-        llm_client: Optional[LLMClient] = None,
+        output_dir: Path | None = None,
+        project_context: dict[str, Any] | None = None,
+        llm_client: LLMClient | None = None,
         use_llm: bool = False,
     ):
         """Initialize the report generator.
@@ -128,6 +127,7 @@ class ReportGenerator:
         self.use_llm = use_llm
 
         # Initialize LLM client if needed
+        self.llm_client: LLMClient | None = None
         if use_llm and llm_client is None:
             # Verify anthropic package is available when CI mode is enabled
             try:
@@ -173,8 +173,8 @@ class ReportGenerator:
 
     def generate_thread_report(
         self,
-        thread: Dict[str, Any],
-        eval_result: Optional[EvaluationResponse],
+        thread: dict[str, Any],
+        eval_result: EvaluationResponse | None,
         run_id: str,
     ) -> Path:
         """Generate an individual report for a single thread.
@@ -205,8 +205,8 @@ class ReportGenerator:
     def update_report_with_tickets(
         self,
         report_path: Path,
-        jira_tickets: Optional[List[Dict[str, str]]] = None,
-        notion_tickets: Optional[List[Dict[str, str]]] = None,
+        jira_tickets: list[dict[str, str]] | None = None,
+        notion_tickets: list[dict[str, str]] | None = None,
     ) -> bool:
         """Update an existing report with ticket information.
 
@@ -301,8 +301,8 @@ class ReportGenerator:
 
     def _build_single_thread_content(
         self,
-        thread: Dict[str, Any],
-        eval_result: Optional[EvaluationResponse],
+        thread: dict[str, Any],
+        eval_result: EvaluationResponse | None,
         run_id: str,
     ) -> str:
         """Build enriched markdown content for a single thread report.
@@ -434,7 +434,7 @@ class ReportGenerator:
 
         return "\n".join(lines)
 
-    def _build_conversation_trace(self, thread: Dict[str, Any]) -> str:
+    def _build_conversation_trace(self, thread: dict[str, Any]) -> str:
         """Build the conversation trace section from thread steps.
 
         Args:
@@ -470,7 +470,7 @@ class ReportGenerator:
                 if len(str(input_text)) > 500:
                     input_preview += "..."
                 lines.append("**Input:**")
-                lines.append(f"```")
+                lines.append("```")
                 lines.append(input_preview)
                 lines.append("```")
                 lines.append("")
@@ -481,7 +481,7 @@ class ReportGenerator:
                 if len(str(output_text)) > 500:
                     output_preview += "..."
                 lines.append("**Output:**")
-                lines.append(f"```")
+                lines.append("```")
                 lines.append(output_preview)
                 lines.append("```")
                 lines.append("")
@@ -494,7 +494,7 @@ class ReportGenerator:
         return "\n".join(lines)
 
     def _build_observations(
-        self, thread: Dict[str, Any], eval_result: Optional[EvaluationResponse]
+        self, thread: dict[str, Any], eval_result: EvaluationResponse | None
     ) -> str:
         """Build key observations section based on thread analysis.
 
@@ -514,7 +514,7 @@ class ReportGenerator:
         return self._generate_observations_deterministic(thread, eval_result)
 
     def _generate_observations_with_llm(
-        self, thread: Dict[str, Any], eval_result: Optional[EvaluationResponse]
+        self, thread: dict[str, Any], eval_result: EvaluationResponse | None
     ) -> str:
         """Generate observations using the LLM."""
         # Prepare thread summary for the LLM
@@ -546,6 +546,7 @@ Format each observation as a bullet point with an emoji indicator:
 Output ONLY the bullet points, no preamble or summary."""
 
         try:
+            assert self.llm_client is not None
             response = self.llm_client.generate(
                 prompt,
                 system_prompt="You are an expert AI/ML engineer analyzing agent execution traces. Provide concise, actionable observations.",
@@ -556,7 +557,7 @@ Output ONLY the bullet points, no preamble or summary."""
             return self._generate_observations_deterministic(thread, eval_result)
 
     def _generate_observations_deterministic(
-        self, thread: Dict[str, Any], eval_result: Optional[EvaluationResponse]
+        self, thread: dict[str, Any], eval_result: EvaluationResponse | None
     ) -> str:
         """Generate observations using deterministic rules (fallback)."""
         observations = []
@@ -627,7 +628,7 @@ Output ONLY the bullet points, no preamble or summary."""
         return "\n".join(f"- {obs}" if not obs.startswith("  ") else obs for obs in observations)
 
     def _build_successes(
-        self, thread: Dict[str, Any], eval_result: Optional[EvaluationResponse]
+        self, thread: dict[str, Any], eval_result: EvaluationResponse | None
     ) -> str:
         """Build the 'What Worked Well' section.
 
@@ -647,7 +648,7 @@ Output ONLY the bullet points, no preamble or summary."""
         return self._generate_successes_deterministic(thread, eval_result)
 
     def _generate_successes_with_llm(
-        self, thread: Dict[str, Any], eval_result: Optional[EvaluationResponse]
+        self, thread: dict[str, Any], eval_result: EvaluationResponse | None
     ) -> str:
         """Generate successes using the LLM."""
         thread_summary = self._prepare_thread_summary(thread, eval_result)
@@ -674,6 +675,7 @@ Format each success as a bullet point starting with a positive emoji (✅, ⚡, 
 Output ONLY the bullet points, no preamble or summary."""
 
         try:
+            assert self.llm_client is not None
             response = self.llm_client.generate(
                 prompt,
                 system_prompt="You are an expert AI/ML engineer analyzing agent execution traces. Focus on identifying positive patterns and successes.",
@@ -684,7 +686,7 @@ Output ONLY the bullet points, no preamble or summary."""
             return self._generate_successes_deterministic(thread, eval_result)
 
     def _generate_successes_deterministic(
-        self, thread: Dict[str, Any], eval_result: Optional[EvaluationResponse]
+        self, thread: dict[str, Any], eval_result: EvaluationResponse | None
     ) -> str:
         """Generate successes using deterministic rules (fallback)."""
         successes = []
@@ -743,7 +745,7 @@ Output ONLY the bullet points, no preamble or summary."""
         return "\n".join(f"- {s}" for s in successes)
 
     def _build_codebase_recommendations(
-        self, thread: Dict[str, Any], eval_result: Optional[EvaluationResponse]
+        self, thread: dict[str, Any], eval_result: EvaluationResponse | None
     ) -> str:
         """Build codebase-aware recommendations.
 
@@ -763,7 +765,7 @@ Output ONLY the bullet points, no preamble or summary."""
         return self._generate_recommendations_deterministic(thread, eval_result)
 
     def _generate_recommendations_with_llm(
-        self, thread: Dict[str, Any], eval_result: Optional[EvaluationResponse]
+        self, thread: dict[str, Any], eval_result: EvaluationResponse | None
     ) -> str:
         """Generate codebase-aware recommendations using the LLM."""
         thread_summary = self._prepare_thread_summary(thread, eval_result)
@@ -811,6 +813,7 @@ Format as:
 ---"""
 
         try:
+            assert self.llm_client is not None
             response = self.llm_client.generate(
                 prompt,
                 system_prompt="""You are a senior software engineer and AI/ML expert reviewing agent execution traces.
@@ -824,7 +827,7 @@ When you have project context, leverage your understanding of the codebase to ma
             return self._generate_recommendations_deterministic(thread, eval_result)
 
     def _generate_recommendations_deterministic(
-        self, thread: Dict[str, Any], eval_result: Optional[EvaluationResponse]
+        self, thread: dict[str, Any], eval_result: EvaluationResponse | None
     ) -> str:
         """Generate recommendations using deterministic rules (fallback)."""
         recommendations = []
@@ -936,7 +939,7 @@ When you have project context, leverage your understanding of the codebase to ma
 
                 if rec.get("affected_code"):
                     lines.append("**Affected Code:**")
-                    lines.append(f"```")
+                    lines.append("```")
                     lines.append(rec["affected_code"])
                     lines.append("```")
                     lines.append("")
@@ -946,7 +949,7 @@ When you have project context, leverage your understanding of the codebase to ma
         return "\n".join(lines)
 
     def _prepare_thread_summary(
-        self, thread: Dict[str, Any], eval_result: Optional[EvaluationResponse]
+        self, thread: dict[str, Any], eval_result: EvaluationResponse | None
     ) -> str:
         """Prepare a concise summary of thread data for LLM prompts.
 
@@ -1026,8 +1029,8 @@ When you have project context, leverage your understanding of the codebase to ma
         return "\n".join(summary_parts)
 
     def _generate_recommendation_for_failure(
-        self, result: Any, thread: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+        self, result: Any, thread: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Generate a recommendation for a failed evaluation.
 
         Args:
@@ -1092,8 +1095,8 @@ When you have project context, leverage your understanding of the codebase to ma
         return None
 
     def _generate_recommendation_for_warning(
-        self, result: Any, thread: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+        self, result: Any, thread: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Generate a recommendation for a warning evaluation.
 
         Args:
@@ -1118,8 +1121,8 @@ When you have project context, leverage your understanding of the codebase to ma
         }
 
     def _count_issues_by_priority(
-        self, eval_result: Optional[EvaluationResponse]
-    ) -> Dict[str, int]:
+        self, eval_result: EvaluationResponse | None
+    ) -> dict[str, int]:
         """Count issues by priority level based on evaluation results.
 
         Args:
@@ -1149,7 +1152,7 @@ When you have project context, leverage your understanding of the codebase to ma
 
         return counts
 
-    def _identify_slow_code_areas(self, thread: Dict[str, Any]) -> Optional[str]:
+    def _identify_slow_code_areas(self, thread: dict[str, Any]) -> str | None:
         """Identify code areas that may be causing slow execution.
 
         Args:
@@ -1176,7 +1179,7 @@ When you have project context, leverage your understanding of the codebase to ma
 
         return "\n".join(areas)
 
-    def _identify_token_heavy_areas(self, thread: Dict[str, Any]) -> Optional[str]:
+    def _identify_token_heavy_areas(self, thread: dict[str, Any]) -> str | None:
         """Identify areas with high token usage.
 
         Args:
@@ -1203,7 +1206,7 @@ When you have project context, leverage your understanding of the codebase to ma
 
         return "\n".join(areas)
 
-    def _categorize_errors(self, errors: List[Any]) -> Dict[str, List[str]]:
+    def _categorize_errors(self, errors: list[Any]) -> dict[str, list[str]]:
         """Categorize errors by type.
 
         Args:
@@ -1212,7 +1215,7 @@ When you have project context, leverage your understanding of the codebase to ma
         Returns:
             Dictionary mapping error types to error lists
         """
-        categories: Dict[str, List[str]] = {}
+        categories: dict[str, list[str]] = {}
 
         for error in errors:
             error_str = str(error)
@@ -1237,7 +1240,7 @@ When you have project context, leverage your understanding of the codebase to ma
 
         return categories
 
-    def _get_error_remediation_actions(self, error_type: str) -> List[str]:
+    def _get_error_remediation_actions(self, error_type: str) -> list[str]:
         """Get remediation actions for a specific error type.
 
         Args:
@@ -1283,7 +1286,7 @@ When you have project context, leverage your understanding of the codebase to ma
             ],
         )
 
-    def _identify_error_source(self, errors: List[Any]) -> Optional[str]:
+    def _identify_error_source(self, errors: list[Any]) -> str | None:
         """Attempt to identify the source of errors.
 
         Args:
@@ -1304,8 +1307,8 @@ When you have project context, leverage your understanding of the codebase to ma
 
     def generate_report(
         self,
-        threads: List[Dict[str, Any]],
-        evaluations: Dict[str, EvaluationResponse],
+        threads: list[dict[str, Any]],
+        evaluations: dict[str, EvaluationResponse],
         run_id: str,
     ) -> Path:
         """Generate a complete analysis report (combined summary).
@@ -1331,8 +1334,8 @@ When you have project context, leverage your understanding of the codebase to ma
 
     def _build_report_content(
         self,
-        threads: List[Dict[str, Any]],
-        evaluations: Dict[str, EvaluationResponse],
+        threads: list[dict[str, Any]],
+        evaluations: dict[str, EvaluationResponse],
         run_id: str,
     ) -> str:
         """Build the report markdown content."""
@@ -1360,9 +1363,9 @@ When you have project context, leverage your understanding of the codebase to ma
 
     def _build_summary(
         self,
-        threads: List[Dict[str, Any]],
-        evaluations: Dict[str, EvaluationResponse],
-    ) -> List[str]:
+        threads: list[dict[str, Any]],
+        evaluations: dict[str, EvaluationResponse],
+    ) -> list[str]:
         """Build the summary section."""
         lines = ["## Summary", ""]
 
@@ -1413,9 +1416,9 @@ When you have project context, leverage your understanding of the codebase to ma
 
     def _build_thread_section(
         self,
-        thread: Dict[str, Any],
-        eval_result: EvaluationResponse = None,
-    ) -> List[str]:
+        thread: dict[str, Any],
+        eval_result: EvaluationResponse | None = None,
+    ) -> list[str]:
         """Build a section for a single thread."""
         thread_id = thread.get("thread_id", "unknown")
         thread_name = thread.get("name", "Unknown")
@@ -1500,7 +1503,7 @@ When you have project context, leverage your understanding of the codebase to ma
 
     def generate_issue_summary(
         self,
-        issues: List[Dict[str, Any]],
+        issues: list[dict[str, Any]],
         run_id: str,
     ) -> Path:
         """Generate a summary of created issues.

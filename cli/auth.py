@@ -13,10 +13,9 @@ import json
 import logging
 import os
 import secrets
-import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional, Tuple
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +45,7 @@ class AuthTokens:
     access_token: str
     id_token: str
     refresh_token: str
-    expires_at: Optional[datetime]  # Datetime in UTC
+    expires_at: datetime | None  # Datetime in UTC
     user_id: str
     email: str
 
@@ -55,15 +54,15 @@ class AuthTokens:
         if not self.expires_at:
             return True
         buffer_seconds = 300  # 5 minutes
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires = (
             self.expires_at
             if self.expires_at.tzinfo
-            else self.expires_at.replace(tzinfo=timezone.utc)
+            else self.expires_at.replace(tzinfo=UTC)
         )
         return now > expires - timedelta(seconds=buffer_seconds)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for storage."""
         return {
             "access_token": self.access_token,
@@ -75,11 +74,11 @@ class AuthTokens:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "AuthTokens":
+    def from_dict(cls, data: dict[str, Any]) -> "AuthTokens":
         """Create from dictionary."""
         expires_at = data.get("expires_at")
         if expires_at:
-            expires_at = datetime.fromtimestamp(expires_at, tz=timezone.utc)
+            expires_at = datetime.fromtimestamp(expires_at, tz=UTC)
         return cls(
             access_token=data["access_token"],
             id_token=data["id_token"],
@@ -93,7 +92,7 @@ class AuthTokens:
 class TokenStorage:
     """Secure token storage using system keyring or encrypted file fallback."""
 
-    def __init__(self, use_keyring: bool = True, config_dir: Optional[str] = None):
+    def __init__(self, use_keyring: bool = True, config_dir: str | None = None):
         """Initialize token storage.
 
         Args:
@@ -141,7 +140,7 @@ class TokenStorage:
         os.chmod(token_file, 0o600)  # User read/write only
         logger.debug("Tokens stored in file")
 
-    def get_tokens(self) -> Optional[AuthTokens]:
+    def get_tokens(self) -> AuthTokens | None:
         """Retrieve stored tokens.
 
         Returns:
@@ -161,7 +160,7 @@ class TokenStorage:
             # Try file fallback
             token_file = self._get_token_file()
             if os.path.exists(token_file):
-                with open(token_file, "r") as f:
+                with open(token_file) as f:
                     data = f.read()
                 logger.debug("Tokens retrieved from file")
 
@@ -237,7 +236,7 @@ class CognitoAuthClient:
         self._info_bits = bytearray("Caldera Derived Key", "utf-8")
 
     @property
-    def client(self):
+    def client(self) -> Any:
         """Lazy-load Cognito client."""
         if self._client is None:
             import boto3
@@ -290,7 +289,7 @@ class CognitoAuthClient:
             secret_block = challenge["SECRET_BLOCK"]
 
             # Compute response
-            timestamp = datetime.now(timezone.utc).strftime("%a %b %d %H:%M:%S %Z %Y")
+            timestamp = datetime.now(UTC).strftime("%a %b %d %H:%M:%S %Z %Y")
             claim = self._compute_claim(
                 small_a=small_a,
                 large_a=large_a,
@@ -330,7 +329,7 @@ class CognitoAuthClient:
             result = auth_result["AuthenticationResult"]
 
             # Parse tokens with datetime expiry
-            expires_at = datetime.now(timezone.utc) + timedelta(seconds=result["ExpiresIn"])
+            expires_at = datetime.now(UTC) + timedelta(seconds=result["ExpiresIn"])
             tokens = AuthTokens(
                 access_token=result["AccessToken"],
                 id_token=result["IdToken"],
@@ -391,7 +390,7 @@ class CognitoAuthClient:
             result = response["AuthenticationResult"]
 
             # Parse tokens with datetime expiry
-            expires_at = datetime.now(timezone.utc) + timedelta(seconds=result["ExpiresIn"])
+            expires_at = datetime.now(UTC) + timedelta(seconds=result["ExpiresIn"])
             tokens = AuthTokens(
                 access_token=result["AccessToken"],
                 id_token=result["IdToken"],
@@ -449,7 +448,7 @@ class CognitoAuthClient:
             email = stored.email if stored else ""
 
             # Parse tokens with datetime expiry
-            expires_at = datetime.now(timezone.utc) + timedelta(seconds=result["ExpiresIn"])
+            expires_at = datetime.now(UTC) + timedelta(seconds=result["ExpiresIn"])
             tokens = AuthTokens(
                 access_token=result["AccessToken"],
                 id_token=result["IdToken"],
@@ -474,7 +473,7 @@ class CognitoAuthClient:
         """Clear stored tokens (local logout)."""
         self._token_storage.clear_tokens()
 
-    def get_current_tokens(self) -> Optional[AuthTokens]:
+    def get_current_tokens(self) -> AuthTokens | None:
         """Get current tokens, refreshing if necessary.
 
         Returns:
@@ -506,7 +505,7 @@ class CognitoAuthClient:
     # SRP Helper Methods
     # =========================================================================
 
-    def _generate_random_key_pair(self) -> Tuple[int, int]:
+    def _generate_random_key_pair(self) -> tuple[int, int]:
         """Generate SRP random key pair."""
         n = int(self._N_HEX, 16)
         g = int(self._g_hex, 16)
@@ -594,7 +593,7 @@ class CognitoAuthClient:
         info_bits_update = self._info_bits + bytearray(chr(1), "utf-8")
         return hmac.new(prk, info_bits_update, hashlib.sha256).digest()[:16]
 
-    def _hash_sha256(self, data) -> bytes:
+    def _hash_sha256(self, data: str | bytes) -> bytes:
         """Compute SHA256 hash."""
         if isinstance(data, str):
             data = data.encode()
@@ -623,7 +622,7 @@ class CognitoAuthClient:
                 payload += "=" * padding
             decoded = base64.urlsafe_b64decode(payload)
             claims = json.loads(decoded)
-            return claims.get("sub", "")
+            return str(claims.get("sub", ""))
         except Exception:
             return ""
 
@@ -635,9 +634,9 @@ DEFAULT_COGNITO_REGION = "ap-southeast-2"
 
 
 def get_auth_client(
-    user_pool_id: Optional[str] = None,
-    client_id: Optional[str] = None,
-    region: Optional[str] = None,
+    user_pool_id: str | None = None,
+    client_id: str | None = None,
+    region: str | None = None,
     use_keyring: bool = True,
 ) -> CognitoAuthClient:
     """Get configured auth client.
