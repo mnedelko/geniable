@@ -2145,7 +2145,7 @@ operational:
   max_iterations: 10
   timeout_seconds: 120
   log_level: "INFO"
-{self._render_langsmith_config_yaml()}{self._render_session_config_yaml()}{self._render_identity_config_yaml()}{self._render_skills_config_yaml()}{self._render_observability_config_yaml()}"""
+{self._render_langsmith_config_yaml()}{self._render_session_config_yaml()}{self._render_identity_config_yaml()}{self._render_skills_config_yaml()}{self._render_tools_config_yaml()}{self._render_observability_config_yaml()}"""
 
     def render_pyproject_toml(self) -> str:
         deps = ['    "pydantic>=2.0.0"', '    "pyyaml>=6.0.0"']
@@ -2310,7 +2310,7 @@ This project includes a tool policy module (`tool_policy.py`) that provides:
 - **Sub-agent restrictions** — hardcoded deny list prevents sub-agents from accessing orchestration tools
 
 Configure tool access in `config.yaml` under the `tools` section.
-{self._render_readme_langsmith()}{self._render_readme_session_persistence()}{self._render_readme_skills()}{self._render_readme_observability()}
+{self._render_readme_langsmith()}{self._render_readme_session_persistence()}{self._render_readme_skills()}{self._render_readme_tools()}{self._render_readme_observability()}
 ## Design Principles
 
 This project is built on 20 agent engineering principles for production systems:
@@ -2332,12 +2332,13 @@ Key settings:
 - **tools.profile** — Tool access level (minimal/coding/full)
 - **tools.deny** — Explicit deny list (always wins over allow)
 - **tools.sub_agent_restrictions** — Enable sub-agent tool restrictions
-- **operational.max_iterations** — Tool loop iteration limit{self._render_readme_langsmith_config_line()}{self._render_readme_session_config_line()}{self._render_readme_skills_config_line()}{self._render_readme_observability_config_line()}
+- **operational.max_iterations** — Tool loop iteration limit{self._render_readme_langsmith_config_line()}{self._render_readme_session_config_line()}{self._render_readme_skills_config_line()}{self._render_readme_tools_config_line()}{self._render_readme_observability_config_line()}
 """
 
     def render_makefile(self) -> str:
         sessions_target = " sessions.py" if self.config.sessions.enabled else ""
         capabilities_target = " capabilities.py" if self.config.skills.enabled else ""
+        tools_target = " tools/" if self.config.tools.enabled else ""
         observability_target = " observability.py" if self.config.observability.enabled else ""
         return f"""\
 .PHONY: lint format typecheck test run clean
@@ -2350,7 +2351,7 @@ format:
 \tisort .
 
 typecheck:
-\tmypy agent.py resilience.py tool_policy.py{sessions_target}{capabilities_target}{observability_target}
+\tmypy agent.py resilience.py tool_policy.py{sessions_target}{capabilities_target}{tools_target}{observability_target}
 
 test:
 \tpytest tests/ -v
@@ -2557,7 +2558,7 @@ class TestConfig:
         ]
         assert "Config" in class_names, "Config class not found in agent.py"
         assert "EvaluatorOutput" in class_names, "EvaluatorOutput class not found"
-{self._render_test_tracing()}{self._render_test_sessions()}{self._render_test_skills()}{self._render_test_observability()}"""
+{self._render_test_tracing()}{self._render_test_sessions()}{self._render_test_skills()}{self._render_test_tools()}{self._render_test_observability()}"""
 
     # ------------------------------------------------------------------
     # sessions.py — Session Persistence (Principle 11)
@@ -4012,6 +4013,534 @@ class TestObservabilitySyntax:
         ]:
             assert expected in func_names, f"{expected} function not found in observability.py"
 """
+
+    # ------------------------------------------------------------------
+    # Tools helpers
+    # ------------------------------------------------------------------
+
+    def _render_tools_config_yaml(self) -> str:
+        """Render the tools directory section of config.yaml, or empty string."""
+        if not self.config.tools.enabled:
+            return ""
+        return f"""
+# Tools — executable functions available to the agent
+tool_functions:
+  directory: "{self.config.tools.tools_dir}"
+  # Add tool-specific configuration below:
+  # example_tool:
+  #   timeout_seconds: 30
+"""
+
+    def _render_readme_tools(self) -> str:
+        """Render the Tools section for README, or empty string."""
+        if not self.config.tools.enabled:
+            return ""
+        return """
+## Tools (Principle 9: Tool Governance)
+
+This project includes a `tools/` directory with auto-discovery, governance
+integration, and progressive disclosure:
+
+| Component | Purpose |
+|-----------|---------|
+| `tools/__init__.py` | Registry, discovery, governance integration |
+| `tools/example_tool.py` | Complete example in the uniform 4-section format |
+| `tool_policy.py` | Governance — profiles, deny lists, sub-agent restrictions |
+
+### Uniform Tool Format
+
+Each tool file follows this 4-section structure:
+
+```python
+# SECTION 1: METADATA — Tier 1 summary for system prompt
+TOOL_METADATA = {"name": "...", "description": "...", ...}
+
+# SECTION 2: CONFIGURATION — tool-specific settings from config.yaml
+# SECTION 3: IMPLEMENTATION — the tool function (same name as TOOL_METADATA["name"])
+# SECTION 4: RESOURCES — Tier 3 runtime references
+TOOL_RESOURCES = {"docs": "...", ...}
+```
+
+### Adding a New Tool
+
+1. Create `tools/my_tool.py` following the uniform format
+2. The registry discovers it automatically at startup
+3. Tool governance (`tool_policy.py`) filters it based on the active profile
+4. The agent framework adapts it (bind_tools / Agent(tools=...) / TOOL_REGISTRY)
+
+### Progressive Disclosure
+
+- **Tier 1**: `TOOL_METADATA["description"]` — always in system prompt
+- **Tier 2**: Module docstring — loaded when tool is selected
+- **Tier 3**: `TOOL_RESOURCES` — loaded during execution
+
+### Inference-Only Failover
+
+When no tools are discovered (empty `tools/` directory), the agent runs in
+inference-only mode — pure LLM reasoning without tool calls. No errors, just
+a log message.
+"""
+
+    def _render_readme_tools_config_line(self) -> str:
+        """Render the tools config bullet for README, or empty string."""
+        if not self.config.tools.enabled:
+            return ""
+        return "\n- **tool_functions.directory** — Directory containing tool modules"
+
+    def _render_test_tools(self) -> str:
+        """Render tools tests for generated test_agent.py, or empty string."""
+        if not self.config.tools.enabled:
+            return ""
+        return """
+
+
+TOOLS_INIT_FILE = Path(__file__).parent.parent / "tools" / "__init__.py"
+EXAMPLE_TOOL_FILE = Path(__file__).parent.parent / "tools" / "example_tool.py"
+
+
+class TestToolsSyntax:
+    \"\"\"Verify generated tools/ files are syntactically valid Python.\"\"\"
+
+    def test_tools_init_exists(self):
+        assert TOOLS_INIT_FILE.exists(), f"tools/__init__.py not found at {TOOLS_INIT_FILE}"
+
+    def test_tools_init_parses(self):
+        \"\"\"Ensure tools/__init__.py is valid Python syntax.\"\"\"
+        source = TOOLS_INIT_FILE.read_text()
+        ast.parse(source)
+
+    def test_tools_init_has_key_classes(self):
+        \"\"\"Verify tools/__init__.py contains required classes.\"\"\"
+        source = TOOLS_INIT_FILE.read_text()
+        tree = ast.parse(source)
+        class_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+        ]
+        for expected in ["ToolMetadata", "ToolDefinition", "ToolRegistry"]:
+            assert expected in class_names, f"{expected} class not found in tools/__init__.py"
+
+    def test_tools_init_has_key_functions(self):
+        \"\"\"Verify tools/__init__.py contains required functions.\"\"\"
+        source = TOOLS_INIT_FILE.read_text()
+        tree = ast.parse(source)
+        func_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        ]
+        for expected in ["discover_tools", "get_permitted_tools"]:
+            assert expected in func_names, f"{expected} function not found in tools/__init__.py"
+
+    def test_example_tool_exists(self):
+        assert EXAMPLE_TOOL_FILE.exists(), f"example_tool.py not found at {EXAMPLE_TOOL_FILE}"
+
+    def test_example_tool_parses(self):
+        \"\"\"Ensure tools/example_tool.py is valid Python syntax.\"\"\"
+        source = EXAMPLE_TOOL_FILE.read_text()
+        ast.parse(source)
+
+    def test_example_tool_has_metadata(self):
+        \"\"\"Verify example_tool.py contains TOOL_METADATA.\"\"\"
+        source = EXAMPLE_TOOL_FILE.read_text()
+        assert "TOOL_METADATA" in source
+
+    def test_example_tool_has_function(self):
+        \"\"\"Verify example_tool.py contains the tool function.\"\"\"
+        source = EXAMPLE_TOOL_FILE.read_text()
+        tree = ast.parse(source)
+        func_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        ]
+        assert "example_tool" in func_names
+
+    def test_example_tool_has_resources(self):
+        \"\"\"Verify example_tool.py contains TOOL_RESOURCES.\"\"\"
+        source = EXAMPLE_TOOL_FILE.read_text()
+        assert "TOOL_RESOURCES" in source
+"""
+
+    # ------------------------------------------------------------------
+    # tools/ — Tool Discovery and Registry
+    # ------------------------------------------------------------------
+
+    def render_tools_init_py(self) -> str:
+        """Render the tools/__init__.py — tool registry with progressive disclosure.
+
+        Provides discovery, registry, governance integration, and failover.
+        """
+        if self.config.observability.enabled:
+            logger_setup = (
+                'from observability import get_logger\n\n'
+                'logger = get_logger("tools")'
+            )
+        else:
+            logger_setup = (
+                'import logging\n\n'
+                'logger = logging.getLogger(__name__)'
+            )
+
+        return f'''\
+"""Tool registry — discovery, governance, and progressive disclosure.
+
+Provides:
+- Tool metadata types with progressive disclosure tiers
+- Auto-discovery of tool modules in the tools/ directory
+- Registry for lookup and governance integration
+- Graceful failover when no tools are defined
+"""
+
+from __future__ import annotations
+
+import importlib
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable
+
+{logger_setup}
+
+
+# =============================================================================
+# 1. TYPES — Progressive Disclosure Tiers
+# =============================================================================
+
+
+@dataclass
+class ToolMetadata:
+    """Tier 1 metadata — loaded into system prompt as summary.
+
+    Attributes:
+        name: Unique tool identifier.
+        description: Short description (~100 words) for system prompt.
+        version: Semantic version of the tool.
+        category: Tool category (e.g. "utility", "data", "integration").
+        parameters: Parameter schema for the tool function.
+    """
+
+    name: str
+    description: str
+    version: str = "1.0.0"
+    category: str = "utility"
+    parameters: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ToolDefinition:
+    """Complete tool definition with all progressive disclosure tiers.
+
+    Attributes:
+        metadata: Tier 1 — summary metadata for system prompt.
+        function: The callable tool implementation.
+        resources: Tier 3 — loaded during execution (docs, endpoints, etc.).
+        module_path: Source module path for debugging.
+    """
+
+    metadata: ToolMetadata
+    function: Callable[..., Any]
+    resources: dict[str, Any] = field(default_factory=dict)
+    module_path: str = ""
+
+
+# =============================================================================
+# 2. DISCOVERY — Auto-import tool modules
+# =============================================================================
+
+
+def discover_tools(tools_dir: Path | None = None) -> list[ToolDefinition]:
+    """Discover tool modules in the tools directory.
+
+    Scans for .py files (excluding _ prefixed) that export TOOL_METADATA.
+    Each module must have:
+    - TOOL_METADATA: dict with at least "name" and "description"
+    - A callable function matching TOOL_METADATA["name"]
+
+    Args:
+        tools_dir: Directory to scan. Defaults to this package\'s directory.
+
+    Returns:
+        List of discovered ToolDefinition instances.
+    """
+    if tools_dir is None:
+        tools_dir = Path(__file__).parent
+
+    tools: list[ToolDefinition] = []
+
+    for path in sorted(tools_dir.glob("*.py")):
+        if path.name.startswith("_"):
+            continue
+
+        module_name = path.stem
+        try:
+            # Add parent to sys.path if needed for import
+            parent_str = str(tools_dir.parent)
+            if parent_str not in sys.path:
+                sys.path.insert(0, parent_str)
+
+            module = importlib.import_module(f"tools.{{module_name}}")
+
+            metadata_dict = getattr(module, "TOOL_METADATA", None)
+            if metadata_dict is None:
+                logger.debug("Skipping %s — no TOOL_METADATA", module_name)
+                continue
+
+            tool_name = metadata_dict.get("name", module_name)
+            func = getattr(module, tool_name, None)
+            if func is None or not callable(func):
+                logger.warning(
+                    "Tool %s has TOOL_METADATA but no callable '%s'",
+                    module_name,
+                    tool_name,
+                )
+                continue
+
+            meta = ToolMetadata(
+                name=tool_name,
+                description=metadata_dict.get("description", ""),
+                version=metadata_dict.get("version", "1.0.0"),
+                category=metadata_dict.get("category", "utility"),
+                parameters=metadata_dict.get("parameters", {{}}),
+            )
+
+            resources = getattr(module, "TOOL_RESOURCES", {{}})
+
+            tools.append(
+                ToolDefinition(
+                    metadata=meta,
+                    function=func,
+                    resources=resources,
+                    module_path=str(path),
+                )
+            )
+            logger.debug("Discovered tool: %s (v%s)", tool_name, meta.version)
+
+        except Exception as exc:
+            logger.warning("Failed to load tool module %s: %s", module_name, exc)
+
+    if not tools:
+        logger.info(
+            "No tools discovered in %s — agent runs in inference-only mode",
+            tools_dir,
+        )
+
+    return tools
+
+
+# =============================================================================
+# 3. REGISTRY — Lookup and access
+# =============================================================================
+
+
+class ToolRegistry:
+    """Registry for discovered tools with progressive disclosure access.
+
+    Provides Tier 1 (metadata), Tier 2 (docstring/description), and
+    Tier 3 (resources) access patterns.
+    """
+
+    def __init__(self) -> None:
+        self._tools: dict[str, ToolDefinition] = {{}}
+
+    def register(self, tool: ToolDefinition) -> None:
+        """Register a tool definition."""
+        self._tools[tool.metadata.name] = tool
+
+    def get_all(self) -> list[ToolDefinition]:
+        """Get all registered tool definitions."""
+        return list(self._tools.values())
+
+    def get(self, name: str) -> ToolDefinition | None:
+        """Get a single tool by name."""
+        return self._tools.get(name)
+
+    def get_metadata(self) -> list[ToolMetadata]:
+        """Tier 1: Get metadata summaries for all tools."""
+        return [t.metadata for t in self._tools.values()]
+
+    def get_description(self, name: str) -> str:
+        """Tier 2: Get full docstring/description for a specific tool."""
+        tool = self._tools.get(name)
+        if tool is None:
+            return ""
+        return tool.function.__doc__ or tool.metadata.description
+
+    def get_resources(self, name: str) -> dict[str, Any]:
+        """Tier 3: Get runtime resources for a specific tool."""
+        tool = self._tools.get(name)
+        if tool is None:
+            return {{}}
+        return tool.resources
+
+    @property
+    def names(self) -> list[str]:
+        """List all registered tool names."""
+        return list(self._tools.keys())
+
+    def __len__(self) -> int:
+        return len(self._tools)
+
+
+# =============================================================================
+# 4. GOVERNANCE INTEGRATION — Filter through tool_policy
+# =============================================================================
+
+
+def get_permitted_tools(
+    tools_dir: Path | None = None,
+    is_subagent: bool = False,
+) -> list[dict[str, Any]]:
+    """Discover tools and filter through governance policy.
+
+    Returns a list of dicts with "name", "function", "metadata", and
+    "resources" keys for each permitted tool.
+
+    Args:
+        tools_dir: Directory to scan for tool modules.
+        is_subagent: If True, apply sub-agent restrictions.
+
+    Returns:
+        List of permitted tool dicts. Empty list if no tools available.
+    """
+    discovered = discover_tools(tools_dir)
+    if not discovered:
+        return []
+
+    # Build a registry from discovered tools
+    registry = ToolRegistry()
+    for tool_def in discovered:
+        registry.register(tool_def)
+
+    # Filter through tool governance
+    try:
+        from tool_policy import filter_tools
+
+        all_names = registry.names
+        permitted_names = filter_tools(all_names, is_subagent=is_subagent)
+    except ImportError:
+        logger.warning("tool_policy not found — allowing all discovered tools")
+        permitted_names = registry.names
+
+    return [
+        {{
+            "name": name,
+            "function": registry.get(name).function,  # type: ignore[union-attr]
+            "metadata": registry.get(name).metadata,  # type: ignore[union-attr]
+            "resources": registry.get(name).resources,  # type: ignore[union-attr]
+        }}
+        for name in permitted_names
+        if registry.get(name) is not None
+    ]
+'''
+
+    def render_example_tool_py(self) -> str:
+        """Render the tools/example_tool.py — a complete tool in uniform format."""
+        return '''\
+"""example_tool — Demonstrate the uniform tool format.
+
+This is a complete example of a tool following the 4-section structure.
+Each tool file in the tools/ directory follows this pattern so that the
+registry can auto-discover and load it.
+
+Progressive Disclosure Tiers:
+- Tier 1: TOOL_METADATA["description"] is included in the system prompt
+- Tier 2: This module docstring provides full instructions when loaded
+- Tier 3: TOOL_RESOURCES provides runtime references (docs, endpoints)
+
+Usage:
+    result = example_tool(query="hello world")
+    # Returns: "Processed: hello world"
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+# =============================================================================
+# SECTION 1: METADATA — Tier 1 (loaded into system prompt as summary)
+# =============================================================================
+
+TOOL_METADATA: dict[str, Any] = {
+    "name": "example_tool",
+    "description": (
+        "Example tool that processes a query string. "
+        "Replace this with your actual tool description. "
+        "Keep under ~100 words for efficient system prompt usage."
+    ),
+    "version": "1.0.0",
+    "category": "utility",
+    "parameters": {
+        "query": {
+            "type": "str",
+            "description": "The input string to process",
+            "required": True,
+        },
+    },
+}
+
+
+# =============================================================================
+# SECTION 2: CONFIGURATION — tool-specific settings from config.yaml
+# =============================================================================
+
+def _load_tool_config() -> dict[str, Any]:
+    """Load tool-specific configuration from config.yaml.
+
+    Reads from the tools.<tool_name> section of config.yaml.
+    Returns empty dict if not configured.
+    """
+    config_path = Path(__file__).parent.parent / "config.yaml"
+    if not config_path.exists():
+        return {}
+
+    try:
+        import yaml
+
+        with open(config_path) as f:
+            full_config = yaml.safe_load(f) or {}
+
+        tools_cfg = full_config.get("tools", {})
+        return tools_cfg.get("example_tool", {})
+    except Exception:
+        return {}
+
+
+# =============================================================================
+# SECTION 3: IMPLEMENTATION — the actual tool logic
+# =============================================================================
+
+
+def example_tool(query: str) -> str:
+    """Process a query string and return the result.
+
+    This is a placeholder implementation. Replace the body with your
+    actual tool logic while keeping the function signature and docstring
+    pattern.
+
+    Args:
+        query: The input string to process.
+
+    Returns:
+        Processed result string.
+
+    Example:
+        >>> example_tool("hello world")
+        'Processed: hello world'
+    """
+    # Load any tool-specific config
+    _config = _load_tool_config()
+    _timeout = _config.get("timeout_seconds", 30)
+
+    # --- Replace this with your actual implementation ---
+    return f"Processed: {query}"
+
+
+# =============================================================================
+# SECTION 4: RESOURCES — Tier 3 (loaded during execution)
+# =============================================================================
+
+TOOL_RESOURCES: dict[str, Any] = {
+    "docs": "https://docs.example.com/tools/example",
+    "changelog": "https://docs.example.com/tools/example/changelog",
+}
+'''
 
     def render_example_skill_md(self) -> str:
         """Render an example SKILL.md demonstrating the three-tier structure."""

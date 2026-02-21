@@ -218,6 +218,58 @@ class AgentState(TypedDict, total=False):
 """
 
     def render_section_5_worker(self) -> str:
+        if self.config.tools.enabled:
+            return f"""\
+# =============================================================================
+# 5. WORKER NODE
+# =============================================================================
+{_principle_comments(5)}
+from tools import get_permitted_tools
+
+
+def worker(state: AgentState) -> dict:
+    \"\"\"Worker node — loads prompt, formats input, invokes LLM with tools.\"\"\"
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    try:
+        system_prompt = load_system_prompt()
+    except FileNotFoundError as e:
+        return {{"error": f"Prompt not found: {{e}}"}}
+
+    query = state.get("query", "")
+    if not query:
+        return {{"error": "No query provided"}}
+
+    try:
+        llm = get_llm()
+
+        # Bind tools discovered from tools/ directory (Principle 9: Tool Governance)
+        permitted = get_permitted_tools()
+        if permitted:
+            from langchain_core.tools import StructuredTool
+
+            tools_for_llm = [
+                StructuredTool.from_function(
+                    func=t["function"],
+                    name=t["name"],
+                    description=t["metadata"].description,
+                )
+                for t in permitted
+            ]
+            llm = llm.bind_tools(tools_for_llm)
+        else:
+            log_invocation("tools", "No tools available — running in inference-only mode")
+
+        response = llm.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=query),
+        ])
+    except Exception as e:
+        return {{"error": f"LLM invocation failed: {{e!s}}"}}
+
+    return {{"response": response.content}}
+"""
+
         return f"""\
 # =============================================================================
 # 5. WORKER NODE
@@ -250,6 +302,33 @@ def worker(state: AgentState) -> dict:
 """
 
     def render_section_6_graph(self) -> str:
+        if self.config.tools.enabled:
+            return f"""\
+# =============================================================================
+# 6. GRAPH CONSTRUCTION
+# =============================================================================
+{_principle_comments(6)}
+
+def build_graph():
+    \"\"\"Build the agent graph: START -> worker -> END.\"\"\"
+    from langgraph.graph import END, START, StateGraph
+
+    graph_builder = StateGraph(AgentState)
+    graph_builder.add_node("worker", worker)
+    graph_builder.add_edge(START, "worker")
+    graph_builder.add_edge("worker", END)
+    return graph_builder
+
+
+def create_agent():
+    \"\"\"Create and compile the agent.
+
+    Tools are discovered from tools/ directory, filtered through tool_policy,
+    and bound to the LLM in the worker node (Section 5).
+    \"\"\"
+    return build_graph().compile()
+"""
+
         return f"""\
 # =============================================================================
 # 6. GRAPH CONSTRUCTION
