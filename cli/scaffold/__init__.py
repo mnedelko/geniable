@@ -5,12 +5,21 @@ following the 8-section architecture pattern and 20 agent engineering principles
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from cli.scaffold.base import BaseTemplate
+
+
+@dataclass
+class ProviderModel:
+    """A provider + model pair for primary or fallback."""
+
+    provider: str  # "bedrock", "openai", "google", "ollama"
+    model_id: str  # e.g. "anthropic.claude-sonnet-4-20250514-v1:0"
+    api_key: str = ""  # Empty for Bedrock/Ollama
 
 
 @dataclass
@@ -21,8 +30,9 @@ class ScaffoldConfig:
     description: str
     framework: str  # "langgraph", "strands", "pi"
     region: str
-    model_id: str
+    primary_model: ProviderModel
     output_dir: str
+    fallback_models: list[ProviderModel] = field(default_factory=list)
 
     def validate(self) -> None:
         """Validate configuration values."""
@@ -33,6 +43,19 @@ class ScaffoldConfig:
             )
         if self.framework not in ("langgraph", "strands", "pi"):
             raise ValueError(f"Unknown framework: {self.framework}")
+
+    @property
+    def model_id(self) -> str:
+        """Backward compat — returns primary model ID."""
+        return self.primary_model.model_id
+
+    @property
+    def all_providers(self) -> set[str]:
+        """All unique providers across primary + fallbacks."""
+        providers = {self.primary_model.provider}
+        for fm in self.fallback_models:
+            providers.add(fm.provider)
+        return providers
 
     @property
     def module_name(self) -> str:
@@ -91,6 +114,7 @@ class ScaffoldGenerator:
         # Generate all files
         files = {
             "agent.py": template.render_agent_py(),
+            "resilience.py": template.render_resilience_py(),
             "config.yaml": template.render_config_yaml(),
             "pyproject.toml": template.render_pyproject_toml(),
             "README.md": template.render_readme(),

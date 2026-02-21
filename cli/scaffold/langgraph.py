@@ -36,29 +36,133 @@ import sys
 """
 
     def render_section_3_client(self) -> str:
-        return f"""\
+        has_fallbacks = bool(self.config.fallback_models)
+
+        if not has_fallbacks:
+            # Single provider — simple client, still imports resilience for future use
+            return f"""\
 # =============================================================================
-# 3. BEDROCK CLIENT (lazy initialization)
+# 3. LLM CLIENT (lazy initialization with resilience)
 # =============================================================================
 {_principle_comments(3)}
 _llm = None
+
+
+def _create_llm_for_provider(provider: str, model_id: str):
+    \"\"\"Create an LLM client for the given provider.\"\"\"
+    if provider == "bedrock":
+        import boto3
+        from langchain_aws import ChatBedrockConverse
+        bedrock_client = boto3.client("bedrock-runtime", region_name=CONFIG.region)
+        return ChatBedrockConverse(
+            model_id=model_id, client=bedrock_client,
+            temperature=CONFIG.temperature, max_tokens=CONFIG.max_tokens,
+        )
+    elif provider == "openai":
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(model=model_id, temperature=CONFIG.temperature, max_tokens=CONFIG.max_tokens)
+    elif provider == "google":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        return ChatGoogleGenerativeAI(model=model_id, temperature=CONFIG.temperature, max_output_tokens=CONFIG.max_tokens)
+    elif provider == "ollama":
+        from langchain_ollama import ChatOllama
+        return ChatOllama(model=model_id, temperature=CONFIG.temperature)
+    else:
+        raise ValueError(f"Unknown provider: {{provider}}")
 
 
 def get_llm():
     \"\"\"Get or create the LLM client (lazy init for faster cold starts).\"\"\"
     global _llm
     if _llm is None:
+        _llm = _create_llm_for_provider(CONFIG.provider, CONFIG.model_id)
+    return _llm
+"""
+
+        # Multi-provider with resilience
+        return f"""\
+# =============================================================================
+# 3. LLM CLIENT (with resilience — fallback cascades + auth rotation)
+# =============================================================================
+{_principle_comments(3)}
+from resilience import (
+    CooldownEngine, CredentialRotator, HealthStore,
+    ModelCandidate, ModelFallbackRunner, ProfileHealthRecord,
+)
+
+
+def _create_llm_for_provider(provider: str, model_id: str):
+    \"\"\"Create an LLM client for the given provider.\"\"\"
+    if provider == "bedrock":
         import boto3
         from langchain_aws import ChatBedrockConverse
-
         bedrock_client = boto3.client("bedrock-runtime", region_name=CONFIG.region)
-        _llm = ChatBedrockConverse(
-            model_id=CONFIG.model_id,
-            client=bedrock_client,
-            temperature=CONFIG.temperature,
-            max_tokens=CONFIG.max_tokens,
+        return ChatBedrockConverse(
+            model_id=model_id, client=bedrock_client,
+            temperature=CONFIG.temperature, max_tokens=CONFIG.max_tokens,
         )
-    return _llm
+    elif provider == "openai":
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(model=model_id, temperature=CONFIG.temperature, max_tokens=CONFIG.max_tokens)
+    elif provider == "google":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        return ChatGoogleGenerativeAI(model=model_id, temperature=CONFIG.temperature, max_output_tokens=CONFIG.max_tokens)
+    elif provider == "ollama":
+        from langchain_ollama import ChatOllama
+        return ChatOllama(model=model_id, temperature=CONFIG.temperature)
+    else:
+        raise ValueError(f"Unknown provider: {{provider}}")
+
+
+def _build_fallback_runner() -> ModelFallbackRunner:
+    \"\"\"Build ModelFallbackRunner from config.\"\"\"
+    cooldown_cfg = getattr(CONFIG, "cooldown_config", {{}})
+    engine = CooldownEngine(
+        transient_tiers=cooldown_cfg.get("transient_tiers"),
+        billing_tiers=cooldown_cfg.get("billing_tiers"),
+    )
+
+    health_store = HealthStore()
+    existing_records = health_store.load()
+    records_by_id = {{r.profile_id: r for r in existing_records}}
+
+    def _get_or_create_profile(profile_id: str) -> ProfileHealthRecord:
+        if profile_id in records_by_id:
+            return records_by_id[profile_id]
+        record = ProfileHealthRecord(profile_id=profile_id)
+        records_by_id[profile_id] = record
+        return record
+
+    primary = ModelCandidate(
+        provider=CONFIG.provider,
+        model_id=CONFIG.model_id,
+        profiles=[_get_or_create_profile(f"{{CONFIG.provider}}/default")],
+    )
+
+    fallbacks = []
+    for fb in getattr(CONFIG, "fallbacks", []):
+        fallbacks.append(ModelCandidate(
+            provider=fb["provider"],
+            model_id=fb["model_id"],
+            profiles=[_get_or_create_profile(f"{{fb['provider']}}/default")],
+        ))
+
+    return ModelFallbackRunner(primary=primary, fallbacks=fallbacks, cooldown_engine=engine)
+
+
+_runner: ModelFallbackRunner | None = None
+
+
+def get_llm():
+    \"\"\"Get LLM with resilience — fallback cascade + auth rotation.\"\"\"
+    global _runner
+    if _runner is None:
+        _runner = _build_fallback_runner()
+
+    def invoke_fn(provider, model_id, profile):
+        return _create_llm_for_provider(provider, model_id)
+
+    return _runner.run(invoke_fn)
 """
 
     def render_section_4_state(self) -> str:
