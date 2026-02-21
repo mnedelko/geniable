@@ -46,6 +46,30 @@ class LangSmithConfig:
 
 
 @dataclass
+class SessionConfig:
+    """Configuration for Principle 11: Session Persistence."""
+
+    enabled: bool = False
+    storage_dir: str = ".agent/sessions"
+    prune_after_days: int = 30
+    max_entries: int = 500
+    rotate_bytes: int = 10_485_760  # 10 MB
+    history_limit: int = 50
+    compaction_threshold: int = 50
+    maintenance_mode: str = "warn"  # "warn" | "enforce"
+
+
+@dataclass
+class SkillsConfig:
+    """Configuration for Principle 7: Progressive Capability Disclosure."""
+
+    enabled: bool = False
+    skills_dir: str = "skills"
+    max_description_chars: int = 150
+    read_tool_name: str = "read_file"
+
+
+@dataclass
 class ProviderModel:
     """A provider + model pair for primary or fallback."""
 
@@ -68,6 +92,8 @@ class ScaffoldConfig:
     identity: IdentityLayerConfig = field(default_factory=IdentityLayerConfig)
     tool_governance: ToolGovernanceConfig = field(default_factory=ToolGovernanceConfig)
     langsmith: LangSmithConfig = field(default_factory=LangSmithConfig)
+    sessions: SessionConfig = field(default_factory=SessionConfig)
+    skills: SkillsConfig = field(default_factory=SkillsConfig)
 
     def validate(self) -> None:
         """Validate configuration values."""
@@ -160,6 +186,18 @@ class ScaffoldGenerator:
             "tests/__init__.py": "",
             "tests/test_agent.py": template.render_test_agent(),
         }
+
+        if self.config.sessions.enabled:
+            files["sessions.py"] = template.render_sessions_py()
+
+        if self.config.skills.enabled:
+            (output_path / "skills" / "example-skill").mkdir(
+                parents=True, exist_ok=True
+            )
+            files["capabilities.py"] = template.render_capabilities_py()
+            files[
+                "skills/example-skill/SKILL.md"
+            ] = template.render_example_skill_md()
 
         if self.config.identity.enabled:
             (output_path / "identity").mkdir(exist_ok=True)

@@ -288,6 +288,7 @@ def create_agent():
                 "# The @traceable decorator adds a top-level span wrapping the full execution.\n"
                 "# Tracing is activated at runtime with the --dev flag.\n"
             )
+        session_wrapper = self._render_session_wrapper()
         main_block = self._render_main_block()
         return f"""\
 # =============================================================================
@@ -319,6 +320,6 @@ def create_agent():
 
     return final_state.get("response", "")
 
-
+{session_wrapper}
 {main_block}
 {langsmith_comment}"""

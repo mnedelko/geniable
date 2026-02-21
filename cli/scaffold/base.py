@@ -175,7 +175,30 @@ class EvaluatorOutput(BaseModel):
                 '"billing_tiers": [18000, 36000, 72000, 86400]})'
             )
 
-        if self.config.identity.enabled:
+        has_identity = self.config.identity.enabled
+        has_skills = self.config.skills.enabled
+
+        if has_identity and has_skills:
+            # Variant 1: Identity + Skills
+            load_prompt_fn = '''\
+
+def load_system_prompt(mode: str = "full") -> str:
+    """Load system prompt via brief-packet assembly (Principle 3) + skills (Principle 7).
+
+    Args:
+        mode: "full" for main agent, "minimal" for sub-agents, "none" for bare calls.
+    """
+    from brief_packet import assemble_brief_packet
+    from capabilities import build_snapshot, build_skills_system_prompt_section
+
+    base_prompt = assemble_brief_packet(mode=mode)
+    snapshot = build_snapshot(str(BASE_DIR))
+    skills_section = build_skills_system_prompt_section(snapshot.prompt)
+    if skills_section:
+        return base_prompt + "\\n\\n" + skills_section
+    return base_prompt'''
+        elif has_identity:
+            # Variant 2: Identity only
             load_prompt_fn = '''\
 
 def load_system_prompt(mode: str = "full") -> str:
@@ -186,7 +209,25 @@ def load_system_prompt(mode: str = "full") -> str:
     """
     from brief_packet import assemble_brief_packet
     return assemble_brief_packet(mode=mode)'''
+        elif has_skills:
+            # Variant 3: Skills only
+            load_prompt_fn = '''\
+
+def load_system_prompt() -> str:
+    """Load system prompt from prompts directory + skills (Principle 7)."""
+    from capabilities import build_snapshot, build_skills_system_prompt_section
+
+    prompt_file = PROMPT_DIR / "system_prompt.md"
+    if not prompt_file.exists():
+        raise FileNotFoundError(f"System prompt not found: {prompt_file}")
+    base_prompt = prompt_file.read_text()
+    snapshot = build_snapshot(str(BASE_DIR))
+    skills_section = build_skills_system_prompt_section(snapshot.prompt)
+    if skills_section:
+        return base_prompt + "\\n\\n" + skills_section
+    return base_prompt'''
         else:
+            # Variant 4: Neither
             load_prompt_fn = '''\
 
 def load_system_prompt() -> str:
@@ -1173,7 +1214,7 @@ operational:
   max_iterations: 10
   timeout_seconds: 120
   log_level: "INFO"
-{self._render_langsmith_config_yaml()}{self._render_identity_config_yaml()}"""
+{self._render_langsmith_config_yaml()}{self._render_session_config_yaml()}{self._render_identity_config_yaml()}{self._render_skills_config_yaml()}"""
 
     def render_pyproject_toml(self) -> str:
         deps = ['    "pydantic>=2.0.0"', '    "pyyaml>=6.0.0"']
@@ -1335,7 +1376,7 @@ This project includes a tool policy module (`tool_policy.py`) that provides:
 - **Sub-agent restrictions** — hardcoded deny list prevents sub-agents from accessing orchestration tools
 
 Configure tool access in `config.yaml` under the `tools` section.
-{self._render_readme_langsmith()}
+{self._render_readme_langsmith()}{self._render_readme_session_persistence()}{self._render_readme_skills()}
 ## Design Principles
 
 This project is built on 20 agent engineering principles for production systems:
@@ -1357,11 +1398,13 @@ Key settings:
 - **tools.profile** — Tool access level (minimal/coding/full)
 - **tools.deny** — Explicit deny list (always wins over allow)
 - **tools.sub_agent_restrictions** — Enable sub-agent tool restrictions
-- **operational.max_iterations** — Tool loop iteration limit{self._render_readme_langsmith_config_line()}
+- **operational.max_iterations** — Tool loop iteration limit{self._render_readme_langsmith_config_line()}{self._render_readme_session_config_line()}{self._render_readme_skills_config_line()}
 """
 
     def render_makefile(self) -> str:
-        return """\
+        sessions_target = " sessions.py" if self.config.sessions.enabled else ""
+        capabilities_target = " capabilities.py" if self.config.skills.enabled else ""
+        return f"""\
 .PHONY: lint format typecheck test run clean
 
 lint:
@@ -1372,7 +1415,7 @@ format:
 \tisort .
 
 typecheck:
-\tmypy agent.py resilience.py tool_policy.py
+\tmypy agent.py resilience.py tool_policy.py{sessions_target}{capabilities_target}
 
 test:
 \tpytest tests/ -v
@@ -1570,7 +1613,1071 @@ class TestConfig:
         ]
         assert "Config" in class_names, "Config class not found in agent.py"
         assert "EvaluatorOutput" in class_names, "EvaluatorOutput class not found"
-{self._render_test_tracing()}"""
+{self._render_test_tracing()}{self._render_test_sessions()}{self._render_test_skills()}"""
+
+    # ------------------------------------------------------------------
+    # sessions.py — Session Persistence (Principle 11)
+    # ------------------------------------------------------------------
+
+    def render_sessions_py(self) -> str:
+        """Render the complete sessions.py for the generated project.
+
+        Implements Principle 11: Session Persistence — consolidates
+        8 blueprint modules into a single file:
+        1. Data Types, 2. Session Key, 3. Transcript, 4. Lock,
+        5. Session Store, 6. Sanitise, 7. Repair, 8. Compact, 9. Config.
+        """
+        return '''\
+"""Session Persistence — append-only, durable, provider-sanitised conversation state.
+
+Principle 11: Session Persistence — provides:
+- Append-only JSONL transcript storage
+- Session key routing context encoding
+- File-based session write locking
+- Provider-specific history sanitisation (Google, Anthropic, OpenAI)
+- JSONL file repair (drop bad lines, atomic rewrite)
+- Session compaction (LLM-powered summarisation)
+- Session store lifecycle management (prune, cap, rotate)
+- Configuration loading from config.yaml
+
+Sections:
+    - Data Types (MessageRole, ToolCall, ToolResult, TokenUsage, Message, SessionEntry, SessionHeader)
+    - Session Key (normalize_agent_id, build_session_key, parse_session_key, is_subagent_key)
+    - Transcript (ensure_session_header, append_message, load_transcript)
+    - Lock (session_write_lock)
+    - Session Store (SessionStore)
+    - Sanitise (ensure_alternating_turns, repair_orphaned_tool_calls, sanitise_for_provider)
+    - Repair (RepairResult, repair_session_file)
+    - Compact (CompactionResult, compact_session)
+    - Config (load_session_config)
+"""
+
+from __future__ import annotations
+
+import atexit
+import glob
+import json
+import logging
+import os
+import re
+import shutil
+import signal
+import time
+import uuid
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from enum import Enum
+from pathlib import Path
+from typing import Any, Callable, Generator
+
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# 1. DATA TYPES
+# =============================================================================
+
+
+class MessageRole(str, Enum):
+    """Role of a message in a conversation."""
+
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
+    SYSTEM = "system"
+
+
+@dataclass
+class ToolCall:
+    """A tool invocation request from the assistant."""
+
+    id: str
+    name: str
+    params: dict[str, Any]
+
+
+@dataclass
+class ToolResult:
+    """The result of a tool invocation."""
+
+    tool_call_id: str
+    name: str
+    result: str
+    is_error: bool = False
+
+
+@dataclass
+class TokenUsage:
+    """Token usage statistics for a message."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+
+
+@dataclass
+class Message:
+    """A single message in a conversation."""
+
+    role: MessageRole
+    content: str | None = None
+    tool_calls: list[ToolCall] | None = None
+    tool_result: ToolResult | None = None
+    model: str | None = None
+    provider: str | None = None
+    usage: TokenUsage | None = None
+    stop_reason: str | None = None
+    timestamp: str = field(
+        default_factory=lambda: datetime.utcnow().isoformat() + "Z"
+    )
+
+
+@dataclass
+class SessionEntry:
+    """Metadata for a single session in the session store."""
+
+    session_id: str
+    session_file: str
+    updated_at: float  # epoch ms
+    channel: str | None = None
+    chat_type: str | None = None
+    group_id: str | None = None
+    spawned_by: str | None = None
+    compaction_count: int = 0
+    total_tokens: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    model: str | None = None
+    provider: str | None = None
+    delivery_context: dict[str, Any] | None = None
+
+    @staticmethod
+    def new(session_key: str, sessions_dir: str) -> SessionEntry:
+        """Create a new session entry with a generated ID."""
+        sid = uuid.uuid4().hex[:12]
+        return SessionEntry(
+            session_id=sid,
+            session_file=f"{sessions_dir}/{sid}.jsonl",
+            updated_at=datetime.utcnow().timestamp() * 1000,
+        )
+
+
+@dataclass
+class SessionHeader:
+    """Header line for a JSONL transcript file."""
+
+    type: str = "session"
+    version: str = "1.0"
+    id: str = ""
+    timestamp: str = ""
+    cwd: str | None = None
+
+
+# =============================================================================
+# 2. SESSION KEY
+# =============================================================================
+
+_VALID_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+
+
+def normalize_agent_id(agent_id: str) -> str:
+    """Lowercase, collapse invalid chars to dashes."""
+    normalized = agent_id.strip().lower()
+    normalized = re.sub(r"[^a-z0-9_-]+", "-", normalized)
+    return normalized.strip("-")[:64]
+
+
+def build_session_key(
+    agent_id: str,
+    scope: str = "main",
+    channel: str | None = None,
+    user_id: str | None = None,
+    thread_id: str | None = None,
+) -> str:
+    """Build a session key encoding routing context.
+
+    Format: agent:{agentId}:{scope}:{channel}:{userId}:{threadId}
+    """
+    parts = ["agent", normalize_agent_id(agent_id), scope]
+    if channel:
+        parts.append(channel)
+    if user_id:
+        parts.append(user_id)
+    if thread_id:
+        parts.append(thread_id)
+    return ":".join(parts)
+
+
+def parse_session_key(key: str) -> dict[str, str | None]:
+    """Extract components from a session key."""
+    parts = key.split(":")
+    return {
+        "prefix": parts[0] if len(parts) > 0 else None,
+        "agent_id": parts[1] if len(parts) > 1 else None,
+        "scope": parts[2] if len(parts) > 2 else None,
+        "channel": parts[3] if len(parts) > 3 else None,
+        "user_id": parts[4] if len(parts) > 4 else None,
+        "thread_id": parts[5] if len(parts) > 5 else None,
+    }
+
+
+def is_subagent_key(key: str) -> bool:
+    """Detect sub-agent sessions by checking scope."""
+    parsed = parse_session_key(key)
+    return parsed.get("scope") not in ("main", None)
+
+
+# =============================================================================
+# 3. TRANSCRIPT
+# =============================================================================
+
+
+def _serialize_message(msg: Message) -> dict[str, Any]:
+    """Convert a Message to a JSON-serializable dict."""
+    d: dict[str, Any] = {"role": msg.role.value}
+    if msg.content is not None:
+        d["content"] = msg.content
+    if msg.tool_calls:
+        d["tool_calls"] = [
+            {"id": tc.id, "name": tc.name, "params": tc.params}
+            for tc in msg.tool_calls
+        ]
+    if msg.tool_result:
+        d["tool_result"] = {
+            "tool_call_id": msg.tool_result.tool_call_id,
+            "name": msg.tool_result.name,
+            "result": msg.tool_result.result,
+            "is_error": msg.tool_result.is_error,
+        }
+    if msg.model:
+        d["model"] = msg.model
+    if msg.provider:
+        d["provider"] = msg.provider
+    if msg.usage:
+        d["usage"] = {
+            "input": msg.usage.input_tokens,
+            "output": msg.usage.output_tokens,
+            "total": msg.usage.total_tokens,
+        }
+    if msg.stop_reason:
+        d["stop_reason"] = msg.stop_reason
+    d["timestamp"] = msg.timestamp
+    return d
+
+
+def ensure_session_header(
+    path: str, session_id: str, cwd: str | None = None
+) -> None:
+    """Create the JSONL file with a session header if it doesn\'t exist."""
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    header: dict[str, Any] = {
+        "type": "session",
+        "version": "1.0",
+        "id": session_id,
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }
+    if cwd:
+        header["cwd"] = cwd
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(header, separators=(",", ":")) + "\\n")
+
+
+def append_message(path: str, message: Message) -> None:
+    """Append a single message to the JSONL transcript.
+
+    This is the ONLY write operation on a transcript file.
+    Never rewrite or modify existing lines.
+    """
+    line = {
+        "type": "message",
+        "message": _serialize_message(message),
+    }
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(line, separators=(",", ":")) + "\\n")
+
+
+def load_transcript(path: str) -> tuple[SessionHeader | None, list[Message]]:
+    """Load a complete transcript from a JSONL file.
+
+    Returns the session header (if present) and all messages.
+    Malformed lines are skipped with a warning.
+    """
+    header: SessionHeader | None = None
+    messages: list[Message] = []
+
+    if not os.path.exists(path):
+        return header, messages
+
+    with open(path, "r", encoding="utf-8") as f:
+        for raw_line in f:
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            try:
+                data = json.loads(raw_line)
+            except json.JSONDecodeError:
+                continue
+
+            if data.get("type") == "session" and header is None:
+                header = SessionHeader(
+                    type=data.get("type", "session"),
+                    version=data.get("version", "1.0"),
+                    id=data.get("id", ""),
+                    timestamp=data.get("timestamp", ""),
+                    cwd=data.get("cwd"),
+                )
+            elif data.get("type") == "message":
+                msg_data = data.get("message", {})
+                msg = Message(
+                    role=MessageRole(msg_data.get("role", "user")),
+                    content=msg_data.get("content"),
+                    timestamp=msg_data.get("timestamp", ""),
+                    model=msg_data.get("model"),
+                    provider=msg_data.get("provider"),
+                    stop_reason=msg_data.get("stop_reason"),
+                )
+                messages.append(msg)
+
+    return header, messages
+
+
+# =============================================================================
+# 4. LOCK
+# =============================================================================
+
+_HELD_LOCKS: dict[str, int] = {}  # path -> reentrant count
+
+LOCK_TIMEOUT_S = 10.0
+STALE_THRESHOLD_S = 1800  # 30 minutes
+
+
+def _lock_path(session_file: str) -> str:
+    return session_file + ".lock"
+
+
+def _is_process_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def _is_lock_stale(lock_path_str: str, stale_threshold_s: float) -> bool:
+    """Check if a lock file is stale (dead process or too old)."""
+    try:
+        with open(lock_path_str, "r") as f:
+            data = json.loads(f.read())
+        pid = data.get("pid", -1)
+        created_at = data.get("created_at", "")
+        if not _is_process_alive(pid):
+            return True
+        lock_time = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        age = (datetime.now(lock_time.tzinfo) - lock_time).total_seconds()
+        return age > stale_threshold_s
+    except (json.JSONDecodeError, OSError, ValueError):
+        return True
+
+
+def _remove_stale_lock(lock_path_str: str) -> None:
+    try:
+        os.unlink(lock_path_str)
+    except OSError:
+        pass
+
+
+@contextmanager
+def session_write_lock(
+    session_file: str,
+    timeout_s: float = LOCK_TIMEOUT_S,
+    stale_threshold_s: float = STALE_THRESHOLD_S,
+) -> Generator[None, None, None]:
+    """Context manager for acquiring a session write lock.
+
+    Usage:
+        with session_write_lock("/path/to/session.jsonl"):
+            append_message(...)
+    """
+    lp = _lock_path(session_file)
+
+    # Reentrant: if we already hold this lock, just increment
+    if lp in _HELD_LOCKS:
+        _HELD_LOCKS[lp] += 1
+        try:
+            yield
+        finally:
+            _HELD_LOCKS[lp] -= 1
+            if _HELD_LOCKS[lp] <= 0:
+                del _HELD_LOCKS[lp]
+        return
+
+    # Acquire with exponential backoff
+    deadline = time.monotonic() + timeout_s
+    attempt = 0
+    while True:
+        try:
+            fd = os.open(lp, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            lock_data = json.dumps({
+                "pid": os.getpid(),
+                "created_at": time.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
+                ),
+            })
+            os.write(fd, lock_data.encode())
+            os.close(fd)
+            break
+        except FileExistsError:
+            if _is_lock_stale(lp, stale_threshold_s):
+                _remove_stale_lock(lp)
+                continue
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Could not acquire session lock for {session_file} "
+                    f"within {timeout_s}s"
+                )
+            attempt += 1
+            time.sleep(min(1.0, 0.05 * attempt))
+
+    _HELD_LOCKS[lp] = 1
+    try:
+        yield
+    finally:
+        _HELD_LOCKS.pop(lp, None)
+        try:
+            os.unlink(lp)
+        except OSError:
+            pass
+
+
+def _cleanup_all_locks(*_args: Any) -> None:
+    """Release all held locks on process exit."""
+    for lp in list(_HELD_LOCKS.keys()):
+        try:
+            os.unlink(lp)
+        except OSError:
+            pass
+    _HELD_LOCKS.clear()
+
+
+atexit.register(_cleanup_all_locks)
+for _sig in (signal.SIGINT, signal.SIGTERM):
+    try:
+        signal.signal(_sig, lambda s, f: (_cleanup_all_locks(), exit(1)))
+    except (OSError, ValueError):
+        pass
+
+
+# =============================================================================
+# 5. SESSION STORE
+# =============================================================================
+
+
+class SessionStore:
+    """Session store management.
+
+    Maps session keys to SessionEntry metadata in a JSON index file.
+    The actual conversation data lives in per-session JSONL files.
+    """
+
+    def __init__(self, store_path: str) -> None:
+        self.store_path = store_path
+        self._entries: dict[str, dict[str, Any]] = {}
+        self._load()
+
+    def _load(self) -> None:
+        if os.path.exists(self.store_path):
+            with open(self.store_path, "r", encoding="utf-8") as f:
+                self._entries = json.load(f)
+        else:
+            self._entries = {}
+
+    def _save(self) -> None:
+        os.makedirs(os.path.dirname(self.store_path), exist_ok=True)
+        tmp = self.store_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(self._entries, f, indent=2)
+        os.replace(tmp, self.store_path)
+
+    def get(self, session_key: str) -> SessionEntry | None:
+        """Get a session entry by key."""
+        data = self._entries.get(session_key)
+        if data is None:
+            return None
+        return SessionEntry(
+            session_id=data["session_id"],
+            session_file=data["session_file"],
+            updated_at=data.get("updated_at", 0),
+            channel=data.get("channel"),
+            chat_type=data.get("chat_type"),
+            group_id=data.get("group_id"),
+            spawned_by=data.get("spawned_by"),
+            compaction_count=data.get("compaction_count", 0),
+            total_tokens=data.get("total_tokens", 0),
+            input_tokens=data.get("input_tokens", 0),
+            output_tokens=data.get("output_tokens", 0),
+            model=data.get("model"),
+            provider=data.get("provider"),
+            delivery_context=data.get("delivery_context"),
+        )
+
+    def upsert(self, session_key: str, entry: SessionEntry) -> None:
+        """Insert or update a session entry."""
+        from dataclasses import asdict
+
+        self._entries[session_key] = asdict(entry)
+        self._save()
+
+    def delete(self, session_key: str) -> bool:
+        """Delete a session entry. Returns True if found."""
+        if session_key in self._entries:
+            del self._entries[session_key]
+            self._save()
+            return True
+        return False
+
+    def keys(self) -> list[str]:
+        """Return all session keys."""
+        return list(self._entries.keys())
+
+    def count(self) -> int:
+        """Return the number of session entries."""
+        return len(self._entries)
+
+    # -- Lifecycle Management --
+
+    def prune_stale(
+        self,
+        max_age: timedelta = timedelta(days=30),
+        protect_keys: set[str] | None = None,
+    ) -> int:
+        """Remove entries older than max_age. Returns count removed."""
+        cutoff = (datetime.utcnow() - max_age).timestamp() * 1000
+        protect = protect_keys or set()
+        to_remove = [
+            k
+            for k, v in self._entries.items()
+            if k not in protect
+            and v.get("updated_at", 0) > 0
+            and v["updated_at"] < cutoff
+        ]
+        for k in to_remove:
+            del self._entries[k]
+        if to_remove:
+            self._save()
+        return len(to_remove)
+
+    def cap_entries(
+        self,
+        max_entries: int = 500,
+        protect_keys: set[str] | None = None,
+    ) -> int:
+        """Keep only the N most recent entries. Returns count removed."""
+        if len(self._entries) <= max_entries:
+            return 0
+        protect = protect_keys or set()
+        sorted_keys = sorted(
+            self._entries.keys(),
+            key=lambda k: self._entries[k].get("updated_at", 0),
+            reverse=True,
+        )
+        keep = set(sorted_keys[:max_entries]) | protect
+        to_remove = [k for k in self._entries if k not in keep]
+        for k in to_remove:
+            del self._entries[k]
+        if to_remove:
+            self._save()
+        return len(to_remove)
+
+    def rotate_if_needed(
+        self,
+        max_bytes: int = 10 * 1024 * 1024,
+        max_backups: int = 3,
+    ) -> bool:
+        """Rotate sessions.json if it exceeds max_bytes."""
+        if not os.path.exists(self.store_path):
+            return False
+        if os.path.getsize(self.store_path) < max_bytes:
+            return False
+        backup = f"{self.store_path}.bak.{int(time.time())}"
+        shutil.copy2(self.store_path, backup)
+        backups = sorted(glob.glob(f"{self.store_path}.bak.*"))
+        for old in backups[:-max_backups]:
+            os.unlink(old)
+        return True
+
+
+# =============================================================================
+# 6. SANITISE
+# =============================================================================
+
+
+def ensure_alternating_turns(messages: list[Message]) -> list[Message]:
+    """Enforce strict user/assistant turn alternation.
+
+    When consecutive messages share the same role, insert a
+    minimal placeholder from the other role.
+    """
+    if not messages:
+        return messages
+
+    result: list[Message] = [messages[0]]
+    for msg in messages[1:]:
+        prev = result[-1]
+        if msg.role == prev.role and msg.role in (
+            MessageRole.USER,
+            MessageRole.ASSISTANT,
+        ):
+            placeholder_role = (
+                MessageRole.ASSISTANT
+                if msg.role == MessageRole.USER
+                else MessageRole.USER
+            )
+            result.append(
+                Message(role=placeholder_role, content="(continued)")
+            )
+        result.append(msg)
+    return result
+
+
+def repair_orphaned_tool_calls(messages: list[Message]) -> list[Message]:
+    """Ensure every tool_call has a matching tool result.
+
+    - Drop tool_calls with no input/arguments
+    - Create synthetic error results for orphaned tool calls
+    - Drop duplicate tool results
+    - Drop free-floating tool results with no matching call
+    """
+    call_ids: set[str] = set()
+    for msg in messages:
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                if tc.id and tc.name:
+                    call_ids.add(tc.id)
+
+    result_ids: set[str] = set()
+    for msg in messages:
+        if msg.tool_result:
+            result_ids.add(msg.tool_result.tool_call_id)
+
+    repaired: list[Message] = []
+    seen_results: set[str] = set()
+
+    for msg in messages:
+        if msg.tool_calls:
+            valid_calls = [
+                tc
+                for tc in msg.tool_calls
+                if tc.id and tc.name and tc.params is not None
+            ]
+            if not valid_calls and not msg.content:
+                continue
+            msg.tool_calls = valid_calls or None
+
+        if msg.tool_result:
+            tcid = msg.tool_result.tool_call_id
+            if tcid not in call_ids:
+                continue
+            if tcid in seen_results:
+                continue
+            seen_results.add(tcid)
+
+        repaired.append(msg)
+
+    missing = call_ids - result_ids
+    for msg in repaired:
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                if tc.id in missing:
+                    repaired.append(
+                        Message(
+                            role=MessageRole.TOOL,
+                            tool_result=ToolResult(
+                                tool_call_id=tc.id,
+                                name=tc.name,
+                                result="Error: tool execution was interrupted",
+                                is_error=True,
+                            ),
+                        )
+                    )
+
+    return repaired
+
+
+def sanitise_for_provider(
+    messages: list[Message],
+    provider: str,
+) -> list[Message]:
+    """Apply provider-specific sanitisation to a message list."""
+    messages = repair_orphaned_tool_calls(messages)
+
+    if provider in ("google", "gemini"):
+        return _sanitise_google(messages)
+    elif provider in ("anthropic",):
+        return _sanitise_anthropic(messages)
+    elif provider in ("openai",):
+        return _sanitise_openai(messages)
+    else:
+        return ensure_alternating_turns(messages)
+
+
+def _sanitise_google(messages: list[Message]) -> list[Message]:
+    """Google/Gemini: strict alternation, no thinking blocks."""
+    messages = ensure_alternating_turns(messages)
+    for msg in messages:
+        if msg.content and "<think>" in msg.content:
+            msg.content = re.sub(
+                r"<think>.*?</think>", "", msg.content, flags=re.DOTALL
+            ).strip()
+    return messages
+
+
+def _sanitise_anthropic(messages: list[Message]) -> list[Message]:
+    """Anthropic: alternation enforced."""
+    return ensure_alternating_turns(messages)
+
+
+def _sanitise_openai(messages: list[Message]) -> list[Message]:
+    """OpenAI: enforce basic ordering."""
+    return ensure_alternating_turns(messages)
+
+
+# =============================================================================
+# 7. REPAIR
+# =============================================================================
+
+
+@dataclass
+class RepairResult:
+    """Result of a session file repair operation."""
+
+    repaired: bool
+    dropped_lines: int
+    backup_path: str | None
+    reason: str | None
+
+
+def repair_session_file(path: str) -> RepairResult:
+    """Repair a potentially corrupted JSONL session file.
+
+    - Reads line by line, drops unparseable JSON
+    - Creates a backup before rewriting
+    - Atomically replaces the original
+    """
+    if not os.path.exists(path):
+        return RepairResult(False, 0, None, "file not found")
+
+    valid_lines: list[str] = []
+    dropped = 0
+
+    with open(path, "r", encoding="utf-8") as f:
+        for raw_line in f:
+            raw_line = raw_line.rstrip("\\n")
+            if not raw_line.strip():
+                continue
+            try:
+                json.loads(raw_line)
+                valid_lines.append(raw_line)
+            except json.JSONDecodeError:
+                dropped += 1
+
+    if dropped == 0:
+        return RepairResult(False, 0, None, None)
+
+    backup = f"{path}.bak-{os.getpid()}-{int(time.time())}"
+    shutil.copy2(path, backup)
+
+    tmp = path + f".tmp-{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        for line in valid_lines:
+            f.write(line + "\\n")
+    os.replace(tmp, path)
+
+    return RepairResult(
+        repaired=True,
+        dropped_lines=dropped,
+        backup_path=backup,
+        reason=f"dropped {dropped} malformed lines",
+    )
+
+
+# =============================================================================
+# 8. COMPACT
+# =============================================================================
+
+
+@dataclass
+class CompactionResult:
+    """Result of a session compaction operation."""
+
+    summary: str
+    messages_before: int
+    messages_after: int
+    tokens_before: int
+    tokens_after: int
+
+
+def compact_session(
+    session_file: str,
+    summarise_fn: Callable[[list[Message]], str],
+    keep_recent: int = 10,
+    estimate_tokens_fn: Callable[[list[Message]], int] | None = None,
+) -> CompactionResult:
+    """Compact a session by summarising older messages.
+
+    Args:
+        session_file: Path to the JSONL transcript.
+        summarise_fn: Callable that takes messages and returns a summary.
+        keep_recent: Number of recent messages to preserve.
+        estimate_tokens_fn: Optional token estimator.
+
+    Returns:
+        CompactionResult with before/after metrics.
+    """
+    with session_write_lock(session_file):
+        repair_session_file(session_file)
+
+        header, messages = load_transcript(session_file)
+        if not messages:
+            return CompactionResult("", 0, 0, 0, 0)
+
+        messages_before = len(messages)
+        tokens_before = (
+            estimate_tokens_fn(messages)
+            if estimate_tokens_fn
+            else messages_before * 100
+        )
+
+        if messages_before <= keep_recent:
+            return CompactionResult(
+                "", messages_before, messages_before,
+                tokens_before, tokens_before,
+            )
+
+        old_messages = messages[:-keep_recent]
+        recent_messages = messages[-keep_recent:]
+
+        summary_text = summarise_fn(old_messages)
+
+        compacted: list[Message] = [
+            Message(
+                role=MessageRole.SYSTEM,
+                content=f"[Compacted conversation summary]\\n\\n{summary_text}",
+            ),
+            *recent_messages,
+        ]
+
+        messages_after = len(compacted)
+        tokens_after = (
+            estimate_tokens_fn(compacted)
+            if estimate_tokens_fn
+            else messages_after * 100
+        )
+
+        tmp = session_file + f".tmp-{os.getpid()}"
+        with open(tmp, "w", encoding="utf-8") as f:
+            if header:
+                f.write(json.dumps({
+                    "type": header.type,
+                    "version": header.version,
+                    "id": header.id,
+                    "timestamp": header.timestamp,
+                    "cwd": header.cwd,
+                    "compacted_at": datetime.utcnow().isoformat() + "Z",
+                }, separators=(",", ":")) + "\\n")
+            for msg in compacted:
+                line = {
+                    "type": "message",
+                    "message": _serialize_message(msg),
+                }
+                f.write(json.dumps(line, separators=(",", ":")) + "\\n")
+        os.replace(tmp, session_file)
+
+        return CompactionResult(
+            summary=summary_text,
+            messages_before=messages_before,
+            messages_after=messages_after,
+            tokens_before=tokens_before,
+            tokens_after=tokens_after,
+        )
+
+
+# =============================================================================
+# 9. CONFIG LOADER
+# =============================================================================
+
+
+def load_session_config(config_path: Path | None = None) -> dict[str, Any]:
+    """Load session configuration from config.yaml.
+
+    Returns the \'sessions\' section of the config, or defaults.
+    """
+    if config_path is None:
+        config_path = Path(__file__).parent / "config.yaml"
+
+    if not config_path.exists():
+        return {}
+
+    import yaml
+
+    with open(config_path) as f:
+        full_config = yaml.safe_load(f) or {}
+
+    return full_config.get("sessions", {})
+'''
+
+    def _render_session_config_yaml(self) -> str:
+        """Render the sessions section of config.yaml, or empty string."""
+        if not self.config.sessions.enabled:
+            return ""
+        return f"""
+sessions:
+  enabled: true
+  storage_dir: "{self.config.sessions.storage_dir}"
+  history_limit: {self.config.sessions.history_limit}
+  compaction_threshold: {self.config.sessions.compaction_threshold}
+  maintenance:
+    mode: "{self.config.sessions.maintenance_mode}"
+    prune_after_days: {self.config.sessions.prune_after_days}
+    max_entries: {self.config.sessions.max_entries}
+    rotate_bytes: {self.config.sessions.rotate_bytes}
+"""
+
+    def _render_readme_session_persistence(self) -> str:
+        """Render the Session Persistence section for README, or empty string."""
+        if not self.config.sessions.enabled:
+            return ""
+        return """
+## Session Persistence (Principle 11)
+
+This project includes a session persistence module (`sessions.py`) that provides:
+
+- **Append-only JSONL transcripts** — forensic-grade conversation logs
+- **Session key routing** — context-encoded keys for efficient lookup
+- **File-based write locking** — prevents concurrent writes with stale detection
+- **Provider sanitisation** — transforms history for Google, Anthropic, OpenAI
+- **JSONL file repair** — drops bad lines, creates backups, atomic rewrite
+- **Session compaction** — LLM-powered summarisation to free context window space
+- **Lifecycle management** — prune stale sessions, cap entries, rotate large files
+- **Configuration loading** — reads session settings from `config.yaml`
+
+Configure session persistence in `config.yaml` under the `sessions` section.
+"""
+
+    def _render_readme_session_config_line(self) -> str:
+        """Render the session config bullet for README, or empty string."""
+        if not self.config.sessions.enabled:
+            return ""
+        return "\n- **sessions.maintenance.mode** — Session lifecycle mode (warn/enforce)"
+
+    def _render_test_sessions(self) -> str:
+        """Render session tests for generated test_agent.py, or empty string."""
+        if not self.config.sessions.enabled:
+            return ""
+        return """
+
+SESSIONS_FILE = Path(__file__).parent.parent / "sessions.py"
+
+
+class TestSessionsSyntax:
+    \"\"\"Verify generated sessions.py is syntactically valid Python.\"\"\"
+
+    def test_sessions_file_exists(self):
+        assert SESSIONS_FILE.exists(), f"sessions.py not found at {SESSIONS_FILE}"
+
+    def test_sessions_parses(self):
+        \"\"\"Ensure sessions.py is valid Python syntax.\"\"\"
+        source = SESSIONS_FILE.read_text()
+        ast.parse(source)
+
+    def test_sessions_has_key_classes(self):
+        \"\"\"Verify sessions.py contains all required classes.\"\"\"
+        source = SESSIONS_FILE.read_text()
+        tree = ast.parse(source)
+        class_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+        ]
+        for expected in ["MessageRole", "SessionStore", "RepairResult", "CompactionResult"]:
+            assert expected in class_names, f"{expected} class not found in sessions.py"
+
+    def test_sessions_has_key_functions(self):
+        \"\"\"Verify sessions.py contains all required functions.\"\"\"
+        source = SESSIONS_FILE.read_text()
+        tree = ast.parse(source)
+        func_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        ]
+        for expected in [
+            "build_session_key", "append_message", "load_transcript",
+            "session_write_lock", "sanitise_for_provider",
+            "repair_session_file", "compact_session",
+        ]:
+            assert expected in func_names, f"{expected} function not found in sessions.py"
+"""
+
+    def _render_session_wrapper(self) -> str:
+        """Render the run_agent_with_session() wrapper, or empty string."""
+        if not self.config.sessions.enabled:
+            return ""
+        return '''
+from sessions import (
+    SessionStore, build_session_key, ensure_session_header,
+    append_message, load_transcript, session_write_lock,
+    Message, MessageRole,
+)
+
+
+def run_agent_with_session(
+    query: str,
+    context: dict | None = None,
+    agent_id: str = "main",
+    sessions_dir: str = ".agent/sessions",
+) -> str:
+    """Run the agent with session persistence (Principle 11).
+
+    Wraps run_agent() with session loading, message appending,
+    and metadata tracking.
+
+    Args:
+        query: The input query to process.
+        context: Optional context dictionary.
+        agent_id: Agent identifier for session key.
+        sessions_dir: Directory for session files.
+
+    Returns:
+        Agent response string.
+    """
+    import time as _time
+
+    store_path = f"{sessions_dir}/sessions.json"
+    store = SessionStore(store_path)
+
+    session_key = build_session_key(agent_id)
+    entry = store.get(session_key)
+    if entry is None:
+        from sessions import SessionEntry
+        entry = SessionEntry.new(session_key, sessions_dir)
+        store.upsert(session_key, entry)
+
+    ensure_session_header(entry.session_file, entry.session_id)
+
+    user_msg = Message(role=MessageRole.USER, content=query)
+    with session_write_lock(entry.session_file):
+        append_message(entry.session_file, user_msg)
+
+    result = run_agent(query, context)
+
+    assistant_msg = Message(role=MessageRole.ASSISTANT, content=result)
+    with session_write_lock(entry.session_file):
+        append_message(entry.session_file, assistant_msg)
+
+    entry.updated_at = _time.time() * 1000
+    store.upsert(session_key, entry)
+
+    return result
+'''
 
     # ------------------------------------------------------------------
     # Tool governance helpers
@@ -1593,9 +2700,11 @@ class TestConfig:
 
         When LangSmith is enabled, adds --dev flag parsing that sets
         LANGCHAIN_TRACING_V2=true at runtime.
+        When sessions are enabled, calls run_agent_with_session() instead.
         """
+        run_fn = "run_agent_with_session" if self.config.sessions.enabled else "run_agent"
         if self.config.langsmith.enabled:
-            return '''\
+            return f'''\
 if __name__ == "__main__":
     import os
 
@@ -1605,28 +2714,28 @@ if __name__ == "__main__":
         os.environ["LANGCHAIN_TRACING_V2"] = "true"
     if _args:
         user_query = " ".join(_args)
-        print(f"Query: {user_query}")
+        print(f"Query: {{user_query}}")
         print("=" * 60)
         try:
-            result = run_agent(user_query)
+            result = {run_fn}(user_query)
             print(result)
         except RuntimeError as e:
-            print(f"Error: {e}")
+            print(f"Error: {{e}}")
             sys.exit(1)
     else:
         print("Usage: python agent.py [--dev] <query>")
         sys.exit(1)'''
-        return '''\
+        return f'''\
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         user_query = " ".join(sys.argv[1:])
-        print(f"Query: {user_query}")
+        print(f"Query: {{user_query}}")
         print("=" * 60)
         try:
-            result = run_agent(user_query)
+            result = {run_fn}(user_query)
             print(result)
         except RuntimeError as e:
-            print(f"Error: {e}")
+            print(f"Error: {{e}}")
             sys.exit(1)
     else:
         print("Usage: python agent.py <query>")
@@ -1732,6 +2841,729 @@ identity:
     head_ratio: 0.7
     tail_ratio: 0.2
 """
+
+    # ------------------------------------------------------------------
+    # Skills / Capabilities (Principle 7)
+    # ------------------------------------------------------------------
+
+    def _render_skills_config_yaml(self) -> str:
+        """Render the skills section of config.yaml, or empty string."""
+        if not self.config.skills.enabled:
+            return ""
+        return f"""
+skills:
+  enabled: true
+  skills_dir: "{self.config.skills.skills_dir}"
+  max_description_chars: {self.config.skills.max_description_chars}
+  read_tool_name: "{self.config.skills.read_tool_name}"
+"""
+
+    def _render_readme_skills(self) -> str:
+        """Render the Progressive Capability Disclosure section for README, or empty string."""
+        if not self.config.skills.enabled:
+            return ""
+        return """
+## Progressive Capability Disclosure (Principle 7)
+
+This project includes a capabilities module (`capabilities.py`) that organises agent
+skills into three tiers for efficient context window usage:
+
+| Tier | Budget | When Loaded |
+|------|--------|-------------|
+| **Metadata** | ~100 words per skill | Always in system prompt |
+| **Full Instructions** | Up to 5,000 words | On demand, when the model reads SKILL.md |
+| **Resources** | Unlimited | During active execution only |
+
+### How It Works
+
+1. **Discovery** — Skills are scanned from `skills/`, `.agents/skills/`, and extra directories
+2. **Filtering** — Skills are checked for OS compatibility, required binaries, and env vars
+3. **Snapshot** — An immutable point-in-time snapshot is created for session consistency
+4. **Prompt Builder** — Tier 1 metadata is formatted as `<available_skills>` XML in the system prompt
+5. **On-Demand Loading** — The model reads SKILL.md (Tier 2) only when it selects a skill
+
+### Adding a Skill
+
+Create a directory under `skills/` with a `SKILL.md` file:
+
+```
+skills/my-skill/
+    SKILL.md          # Tier 1 (frontmatter) + Tier 2 (body)
+    references/       # Tier 3 resources (optional)
+    scripts/          # Tier 3 resources (optional)
+```
+
+Configure skills in `config.yaml` under the `skills` section.
+"""
+
+    def _render_readme_skills_config_line(self) -> str:
+        """Render the skills config bullet for README, or empty string."""
+        if not self.config.skills.enabled:
+            return ""
+        return "\n- **skills.skills_dir** — Directory to scan for skill definitions"
+
+    def _render_test_skills(self) -> str:
+        """Render capabilities tests for generated test_agent.py, or empty string."""
+        if not self.config.skills.enabled:
+            return ""
+        return """
+
+CAPABILITIES_FILE = Path(__file__).parent.parent / "capabilities.py"
+
+
+class TestCapabilitiesSyntax:
+    \"\"\"Verify generated capabilities.py is syntactically valid Python.\"\"\"
+
+    def test_capabilities_file_exists(self):
+        assert CAPABILITIES_FILE.exists(), f"capabilities.py not found at {CAPABILITIES_FILE}"
+
+    def test_capabilities_parses(self):
+        \"\"\"Ensure capabilities.py is valid Python syntax.\"\"\"
+        source = CAPABILITIES_FILE.read_text()
+        ast.parse(source)
+
+    def test_capabilities_has_key_classes(self):
+        \"\"\"Verify capabilities.py contains all required classes.\"\"\"
+        source = CAPABILITIES_FILE.read_text()
+        tree = ast.parse(source)
+        class_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+        ]
+        for expected in [
+            "SkillSource", "SkillRequirements", "SkillMetadata",
+            "SkillSnapshot", "SnapshotCache",
+        ]:
+            assert expected in class_names, f"{expected} class not found in capabilities.py"
+
+    def test_capabilities_has_key_functions(self):
+        \"\"\"Verify capabilities.py contains all required functions.\"\"\"
+        source = CAPABILITIES_FILE.read_text()
+        tree = ast.parse(source)
+        func_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        ]
+        for expected in [
+            "parse_skill_file", "extract_description",
+            "scan_skill_directory", "discover_all_skills",
+            "filter_eligible_skills", "build_snapshot",
+            "format_skills_for_prompt", "build_skills_system_prompt_section",
+            "load_full_instructions", "load_resource",
+        ]:
+            assert expected in func_names, f"{expected} function not found in capabilities.py"
+"""
+
+    def render_example_skill_md(self) -> str:
+        """Render an example SKILL.md demonstrating the three-tier structure."""
+        return '''\
+---
+description: "Example skill — demonstrates the three-tier progressive disclosure structure."
+metadata: |
+  {"emoji": "📋", "primaryEnv": "python"}
+user-invocable: true
+---
+
+## Example Skill
+
+This is an example skill that demonstrates the SKILL.md format.
+
+### Tier Structure
+
+- **Tier 1 (above)**: The YAML frontmatter is parsed at startup and included
+  in the system prompt as lightweight metadata (~100 words).
+- **Tier 2 (this section)**: The full instructions body is loaded on demand
+  when the model selects this skill via the `read_file` tool.
+- **Tier 3**: Any files in this directory (scripts/, references/, etc.) are
+  loaded only during active execution when the instructions reference them.
+
+### Instructions
+
+1. Identify the user's request
+2. Follow the steps in this document
+3. Reference any Tier 3 resources as needed
+
+### Notes
+
+- Replace this file with your actual skill instructions
+- Keep the frontmatter description under 150 characters
+- Add `requires` in metadata for environment checks (bins, env vars, OS)
+'''
+
+    def render_capabilities_py(self) -> str:
+        """Render the complete capabilities.py for the generated project.
+
+        Implements Principle 7: Progressive Capability Disclosure — consolidates
+        7 blueprint modules into a single file:
+        1. Types, 2. Frontmatter, 3. Discovery, 4. Filtering,
+        5. Snapshot, 6. Prompt Builder, 7. Loader.
+        """
+        return '''\
+"""Progressive Capability Disclosure — three-tier skill management.
+
+Principle 7: Progressive Capability Disclosure — provides:
+- Three-tier skill organisation (metadata, instructions, resources)
+- Multi-source skill discovery with priority-based merging
+- Environment eligibility filtering (OS, binaries, env vars)
+- Immutable session snapshots for consistency
+- System prompt injection of Tier 1 metadata
+- On-demand Tier 2/3 loading via read tool
+- Snapshot caching with version-based invalidation
+
+Sections:
+    - Types (SkillSource, SkillRequirements, SkillMetadata, SkillSnapshot)
+    - Frontmatter (parse_skill_file, extract_description, extract_requirements)
+    - Discovery (scan_skill_directory, discover_all_skills)
+    - Filtering (check_os, check_bins, check_any_bins, check_env_vars, filter_eligible_skills)
+    - Snapshot (build_snapshot, get_snapshot_version, bump_snapshot_version, SnapshotCache)
+    - Prompt Builder (format_skills_for_prompt, build_skills_system_prompt_section)
+    - Loader (load_full_instructions, load_resource, list_resources)
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import platform
+import re
+import shutil
+import threading
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any
+
+
+# =============================================================================
+# TYPES
+# =============================================================================
+
+
+class SkillSource(str, Enum):
+    """Precedence order — higher numeric value wins."""
+
+    EXTRA = "extra"
+    PROJECT = "project"
+    WORKSPACE = "workspace"
+
+
+SOURCE_PRIORITY: dict[SkillSource, int] = {
+    SkillSource.EXTRA: 1,
+    SkillSource.PROJECT: 2,
+    SkillSource.WORKSPACE: 3,
+}
+
+
+@dataclass
+class SkillRequirements:
+    """What the host environment must have for this skill to be eligible."""
+
+    bins: list[str] = field(default_factory=list)
+    any_bins: list[str] = field(default_factory=list)
+    env_vars: list[str] = field(default_factory=list)
+    os: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SkillMetadata:
+    """Tier 1 — the lightweight summary that lives in the system prompt.
+
+    Budget: ~100 words / 150 characters for the description.
+    """
+
+    name: str
+    description: str
+    skill_dir: str
+    skill_file: str
+    source: SkillSource
+    emoji: str | None = None
+    primary_env: str | None = None
+    always: bool = False
+    user_invocable: bool = True
+    model_invocable: bool = True
+    requires: SkillRequirements = field(default_factory=SkillRequirements)
+    homepage: str | None = None
+
+
+@dataclass
+class SkillSnapshot:
+    """An immutable point-in-time capture of all available skills.
+
+    Created once per session. Never modified during the session.
+    Changes on disk take effect on the NEXT invocation.
+    """
+
+    skills: list[SkillMetadata]
+    prompt: str
+    version: int
+    created_at: str = ""
+
+    def skill_names(self) -> list[str]:
+        return [s.name for s in self.skills]
+
+    def get_skill(self, name: str) -> SkillMetadata | None:
+        for s in self.skills:
+            if s.name == name:
+                return s
+        return None
+
+
+# =============================================================================
+# FRONTMATTER
+# =============================================================================
+
+
+_FRONTMATTER_RE = re.compile(
+    r"^---\\s*\\n(.*?)\\n---\\s*\\n",
+    re.DOTALL,
+)
+
+
+def parse_skill_file(content: str) -> tuple[dict[str, Any], str]:
+    """Split a SKILL.md into frontmatter (dict) and body (str).
+
+    Returns:
+        (frontmatter_dict, body_text)
+    """
+    match = _FRONTMATTER_RE.match(content)
+    if not match:
+        return {}, content
+
+    raw_fm = match.group(1)
+    body = content[match.end():]
+
+    try:
+        import yaml
+
+        frontmatter: dict[str, Any] = yaml.safe_load(raw_fm) or {}
+    except Exception:
+        frontmatter = {}
+
+    if "metadata" in frontmatter and isinstance(frontmatter["metadata"], str):
+        try:
+            frontmatter["metadata"] = json.loads(frontmatter["metadata"])
+        except json.JSONDecodeError:
+            frontmatter["metadata"] = {}
+
+    return frontmatter, body.strip()
+
+
+def extract_description(frontmatter: dict[str, Any], max_chars: int = 150) -> str:
+    """Extract and truncate the skill description.
+
+    Enforces the Tier 1 size budget.
+    """
+    desc = frontmatter.get("description", "").strip()
+    if len(desc) > max_chars:
+        return desc[: max_chars - 1] + "\\u2026"
+    return desc
+
+
+def extract_requirements(frontmatter: dict[str, Any]) -> dict[str, Any]:
+    """Extract requirements from metadata."""
+    meta = frontmatter.get("metadata", {})
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except json.JSONDecodeError:
+            meta = {}
+    return meta.get("requires", {})
+
+
+def is_model_invocable(frontmatter: dict[str, Any]) -> bool:
+    """Check if the model is allowed to invoke this skill."""
+    return not frontmatter.get("disable-model-invocation", False)
+
+
+def is_user_invocable(frontmatter: dict[str, Any]) -> bool:
+    """Check if the user can invoke this skill directly."""
+    return frontmatter.get("user-invocable", True)
+
+
+# =============================================================================
+# DISCOVERY
+# =============================================================================
+
+
+def scan_skill_directory(
+    directory: str,
+    source: SkillSource,
+) -> list[SkillMetadata]:
+    """Scan a directory for skill subdirectories containing SKILL.md.
+
+    Each subdirectory with a SKILL.md is treated as one skill.
+    The directory name becomes the skill name.
+    """
+    skills: list[SkillMetadata] = []
+
+    if not os.path.isdir(directory):
+        return skills
+
+    for entry in sorted(os.listdir(directory)):
+        skill_dir = os.path.join(directory, entry)
+        skill_file = os.path.join(skill_dir, "SKILL.md")
+
+        if not os.path.isdir(skill_dir) or not os.path.isfile(skill_file):
+            continue
+
+        try:
+            with open(skill_file, "r", encoding="utf-8") as f:
+                content = f.read()
+        except OSError:
+            continue
+
+        frontmatter, _body = parse_skill_file(content)
+
+        reqs_raw = extract_requirements(frontmatter)
+        meta_raw = frontmatter.get("metadata", {})
+        if isinstance(meta_raw, str):
+            try:
+                meta_raw = json.loads(meta_raw)
+            except json.JSONDecodeError:
+                meta_raw = {}
+
+        requirements = SkillRequirements(
+            bins=reqs_raw.get("bins", []),
+            any_bins=reqs_raw.get("anyBins", []),
+            env_vars=reqs_raw.get("env", []),
+            os=meta_raw.get("os", []),
+        )
+
+        skill = SkillMetadata(
+            name=entry,
+            description=extract_description(frontmatter),
+            skill_dir=skill_dir,
+            skill_file=skill_file,
+            source=source,
+            emoji=meta_raw.get("emoji"),
+            primary_env=meta_raw.get("primaryEnv"),
+            always=meta_raw.get("always", False),
+            user_invocable=is_user_invocable(frontmatter),
+            model_invocable=is_model_invocable(frontmatter),
+            requires=requirements,
+            homepage=meta_raw.get("homepage"),
+        )
+        skills.append(skill)
+
+    return skills
+
+
+def discover_all_skills(
+    workspace_dir: str,
+    extra_dirs: list[str] | None = None,
+) -> list[SkillMetadata]:
+    """Discover skills from 3 sources and merge with precedence.
+
+    Sources (ascending priority):
+      1. Extra directories (lowest)
+      2. Project agent skills (.agents/skills/)
+      3. Workspace skills (skills/)
+
+    Higher-priority sources override lower-priority ones when
+    skills share the same name.
+    """
+    sources: list[tuple[str, SkillSource]] = []
+
+    for d in (extra_dirs or []):
+        sources.append((d, SkillSource.EXTRA))
+
+    project_skills = os.path.join(workspace_dir, ".agents", "skills")
+    if os.path.isdir(project_skills):
+        sources.append((project_skills, SkillSource.PROJECT))
+
+    workspace_skills = os.path.join(workspace_dir, "skills")
+    if os.path.isdir(workspace_skills):
+        sources.append((workspace_skills, SkillSource.WORKSPACE))
+
+    all_skills: list[SkillMetadata] = []
+    for directory, source in sources:
+        all_skills.extend(scan_skill_directory(directory, source))
+
+    merged: dict[str, SkillMetadata] = {}
+    all_skills.sort(key=lambda s: SOURCE_PRIORITY[s.source])
+    for skill in all_skills:
+        merged[skill.name] = skill
+
+    return list(merged.values())
+
+
+# =============================================================================
+# FILTERING
+# =============================================================================
+
+
+def check_os(skill: SkillMetadata) -> bool:
+    """Check if the current OS is in the skill's supported list."""
+    if not skill.requires.os:
+        return True
+    current = platform.system().lower()
+    return current in [o.lower() for o in skill.requires.os]
+
+
+def check_bins(skill: SkillMetadata) -> bool:
+    """Check that all required binaries exist on PATH."""
+    for binary in skill.requires.bins:
+        if shutil.which(binary) is None:
+            return False
+    return True
+
+
+def check_any_bins(skill: SkillMetadata) -> bool:
+    """Check that at least one of the required binaries exists."""
+    if not skill.requires.any_bins:
+        return True
+    return any(shutil.which(b) is not None for b in skill.requires.any_bins)
+
+
+def check_env_vars(skill: SkillMetadata) -> bool:
+    """Check that all required environment variables are set."""
+    for var in skill.requires.env_vars:
+        if not os.environ.get(var):
+            return False
+    return True
+
+
+def filter_eligible_skills(
+    skills: list[SkillMetadata],
+    agent_allowlist: list[str] | None = None,
+    include_model_invocable_only: bool = True,
+) -> list[SkillMetadata]:
+    """Filter skills to only those eligible for the current environment.
+
+    Checks (in order):
+      1. OS compatibility
+      2. Required binaries (all)
+      3. Required binaries (any)
+      4. Required environment variables
+      5. Model invocation policy
+      6. Agent-specific allowlist
+    """
+    eligible: list[SkillMetadata] = []
+
+    for skill in skills:
+        if not check_os(skill):
+            continue
+        if not check_bins(skill):
+            continue
+        if not check_any_bins(skill):
+            continue
+        if not check_env_vars(skill):
+            continue
+        if include_model_invocable_only and not skill.model_invocable:
+            continue
+        if agent_allowlist is not None and skill.name not in agent_allowlist:
+            continue
+
+        eligible.append(skill)
+
+    return eligible
+
+
+# =============================================================================
+# SNAPSHOT
+# =============================================================================
+
+
+_version_lock = threading.Lock()
+_global_version = 0
+
+
+def get_snapshot_version() -> int:
+    """Get the current global snapshot version."""
+    with _version_lock:
+        return _global_version
+
+
+def bump_snapshot_version() -> int:
+    """Bump and return the new global snapshot version."""
+    global _global_version
+    with _version_lock:
+        _global_version += 1
+        return _global_version
+
+
+def build_snapshot(
+    workspace_dir: str,
+    extra_dirs: list[str] | None = None,
+    agent_allowlist: list[str] | None = None,
+) -> SkillSnapshot:
+    """Build an immutable skill snapshot for the current session.
+
+    This is the main entry point. It:
+      1. Discovers skills from all sources
+      2. Filters for eligibility
+      3. Formats Tier 1 metadata for the system prompt
+      4. Returns a frozen snapshot
+    """
+    all_skills = discover_all_skills(
+        workspace_dir=workspace_dir,
+        extra_dirs=extra_dirs,
+    )
+
+    eligible = filter_eligible_skills(
+        skills=all_skills,
+        agent_allowlist=agent_allowlist,
+    )
+
+    prompt = format_skills_for_prompt(eligible)
+
+    return SkillSnapshot(
+        skills=eligible,
+        prompt=prompt,
+        version=get_snapshot_version(),
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+class SnapshotCache:
+    """Cache a snapshot per session, rebuilding only when version changes."""
+
+    def __init__(self) -> None:
+        self._cache: dict[str, tuple[int, SkillSnapshot]] = {}
+
+    def get_or_build(
+        self,
+        session_id: str,
+        workspace_dir: str,
+        **kwargs: Any,
+    ) -> SkillSnapshot:
+        """Get a cached snapshot or build a new one."""
+        current_version = get_snapshot_version()
+        cached = self._cache.get(session_id)
+
+        if cached and cached[0] == current_version:
+            return cached[1]
+
+        snapshot = build_snapshot(workspace_dir, **kwargs)
+        self._cache[session_id] = (current_version, snapshot)
+        return snapshot
+
+
+# =============================================================================
+# PROMPT BUILDER
+# =============================================================================
+
+
+MAX_DESCRIPTION_CHARS = 150
+
+
+def format_skills_for_prompt(skills: list[SkillMetadata]) -> str:
+    """Format all eligible skills into the Tier 1 system prompt block.
+
+    Each skill gets ~100 words: name, description, and file location.
+    """
+    if not skills:
+        return ""
+
+    lines = ["<available_skills>"]
+    for skill in sorted(skills, key=lambda s: s.name):
+        desc = skill.description
+        if len(desc) > MAX_DESCRIPTION_CHARS:
+            desc = desc[: MAX_DESCRIPTION_CHARS - 1] + "\\u2026"
+
+        lines.append(f\'<skill name="{skill.name}">\')
+        lines.append(f"  <description>{desc}</description>")
+        lines.append(f"  <location>{skill.skill_file}</location>")
+        if skill.primary_env:
+            lines.append(f"  <env>{skill.primary_env}</env>")
+        lines.append("</skill>")
+
+    lines.append("</available_skills>")
+    return "\\n".join(lines)
+
+
+def build_skills_system_prompt_section(
+    skills_prompt: str,
+    read_tool_name: str = "read_file",
+) -> str:
+    """Build the full skills section for insertion into the system prompt.
+
+    Includes scanning instructions, the constraint about
+    reading at most one skill, and the formatted metadata.
+    """
+    if not skills_prompt:
+        return ""
+
+    return "\\n".join([
+        "## Skills",
+        "",
+        "Before replying, scan the <available_skills> entries below.",
+        f"- If exactly one skill clearly applies: use the `{read_tool_name}` "
+        "tool to read its SKILL.md at <location>, then follow its instructions.",
+        "- If multiple could apply: choose the most specific one, then read and follow it.",
+        "- If none clearly apply: do not read any SKILL.md — respond normally.",
+        "",
+        "Constraints: never read more than one SKILL.md per turn.",
+        "Only read after selecting — do not speculatively read skills.",
+        "",
+        skills_prompt,
+        "",
+    ])
+
+
+# =============================================================================
+# LOADER
+# =============================================================================
+
+
+def load_full_instructions(skill: SkillMetadata) -> str:
+    """Load Tier 2: the full instruction body from SKILL.md.
+
+    The frontmatter is stripped — only the instruction body is returned.
+    """
+    with open(skill.skill_file, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    _frontmatter, body = parse_skill_file(content)
+    return body
+
+
+def load_resource(skill: SkillMetadata, relative_path: str) -> str | bytes:
+    """Load a Tier 3 resource from the skill's directory.
+
+    Args:
+        skill: The skill metadata.
+        relative_path: Path relative to the skill directory.
+
+    Returns:
+        File contents as str (text files) or bytes (binary files).
+
+    Raises:
+        FileNotFoundError: If the resource doesn't exist.
+        ValueError: If the path escapes the skill directory.
+    """
+    full_path = os.path.normpath(os.path.join(skill.skill_dir, relative_path))
+
+    if not full_path.startswith(os.path.normpath(skill.skill_dir)):
+        raise ValueError(
+            f"Path traversal detected: {relative_path} escapes {skill.skill_dir}"
+        )
+
+    if not os.path.exists(full_path):
+        raise FileNotFoundError(f"Resource not found: {full_path}")
+
+    try:
+        with open(full_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except UnicodeDecodeError:
+        with open(full_path, "rb") as f:
+            return f.read()
+
+
+def list_resources(skill: SkillMetadata) -> list[str]:
+    """List all Tier 3 resources available in the skill directory.
+
+    Returns relative paths from the skill directory root.
+    Excludes SKILL.md itself.
+    """
+    resources: list[str] = []
+    for root, _dirs, files in os.walk(skill.skill_dir):
+        for fname in files:
+            if fname == "SKILL.md":
+                continue
+            full = os.path.join(root, fname)
+            rel = os.path.relpath(full, skill.skill_dir)
+            resources.append(rel)
+    return sorted(resources)
+'''
 
     def render_brief_packet_py(self) -> str:
         """Render the brief_packet.py module for dynamic system prompt assembly."""

@@ -7,7 +7,12 @@ import typer
 from rich.console import Console
 
 from cli.output_formatter import print_error, print_info, print_success
-from cli.scaffold import IdentityLayerConfig, LangSmithConfig, ToolGovernanceConfig
+from cli.scaffold import (
+    IdentityLayerConfig,
+    LangSmithConfig,
+    SessionConfig,
+    ToolGovernanceConfig,
+)
 
 console = Console()
 app = typer.Typer(help="Generate agent project scaffolds")
@@ -380,6 +385,46 @@ def _ask_langsmith(project_name: str) -> LangSmithConfig:
     return LangSmithConfig(enabled=True, project=project)
 
 
+MAINTENANCE_MODE_CHOICES = [
+    questionary.Choice(
+        title="Warn     — log warnings but don't prune/cap automatically",
+        value="warn",
+    ),
+    questionary.Choice(
+        title="Enforce  — automatically prune stale sessions and cap entries",
+        value="enforce",
+    ),
+]
+
+
+def _ask_session_persistence() -> SessionConfig:
+    """Ask user about session persistence configuration (Principle 11).
+
+    Returns:
+        SessionConfig with user selections.
+    """
+    enable = questionary.confirm(
+        "Enable session persistence? (Principle 11: Append-only conversation state)",
+        default=False,
+    ).ask()
+
+    if enable is None:
+        raise typer.Abort()
+
+    if not enable:
+        return SessionConfig(enabled=False)
+
+    maintenance_mode = questionary.select(
+        "Session maintenance mode:",
+        choices=MAINTENANCE_MODE_CHOICES,
+    ).ask()
+
+    if maintenance_mode is None:
+        raise typer.Abort()
+
+    return SessionConfig(enabled=True, maintenance_mode=maintenance_mode)
+
+
 @app.command("create")
 def create() -> None:
     """Create a new agent project from a template.
@@ -492,6 +537,10 @@ def create() -> None:
     console.print("\n[cyan]Observability (Principle 16: LangSmith Tracing)[/cyan]")
     langsmith_config = _ask_langsmith(project_name)
 
+    # 11. Session persistence (Principle 11)
+    console.print("\n[cyan]Session Persistence (Principle 11: Conversation State)[/cyan]")
+    session_config = _ask_session_persistence()
+
     # Generate
     from cli.scaffold import ScaffoldConfig, ScaffoldGenerator
 
@@ -506,6 +555,7 @@ def create() -> None:
         identity=identity_config,
         tool_governance=tool_governance_config,
         langsmith=langsmith_config,
+        sessions=session_config,
     )
 
     try:

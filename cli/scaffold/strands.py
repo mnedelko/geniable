@@ -260,6 +260,7 @@ def create_agent():
         if self.config.langsmith.enabled:
             langsmith_import = "from langsmith import traceable\n\n"
             langsmith_decorator = f'@traceable(name="{self.config.project_name}")\n'
+        session_wrapper = self._render_session_wrapper()
         main_block = self._render_main_block()
         return f"""\
 # =============================================================================
@@ -285,6 +286,6 @@ def create_agent():
     except Exception as e:
         raise RuntimeError(f"Agent invocation failed: {{e!s}}") from e
 
-
+{session_wrapper}
 {main_block}
 """

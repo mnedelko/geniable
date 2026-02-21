@@ -12,6 +12,8 @@ from cli.scaffold import (
     ProviderModel,
     ScaffoldConfig,
     ScaffoldGenerator,
+    SessionConfig,
+    SkillsConfig,
     ToolGovernanceConfig,
 )
 
@@ -43,6 +45,8 @@ def _make_config(
     identity: IdentityLayerConfig | None = None,
     tool_governance: ToolGovernanceConfig | None = None,
     langsmith: LangSmithConfig | None = None,
+    sessions: SessionConfig | None = None,
+    skills: SkillsConfig | None = None,
 ) -> ScaffoldConfig:
     output_dir = str(tmp_path / "test-agent") if tmp_path else "./test-agent"
     return ScaffoldConfig(
@@ -59,6 +63,8 @@ def _make_config(
         identity=identity or IdentityLayerConfig(),
         tool_governance=tool_governance or ToolGovernanceConfig(),
         langsmith=langsmith or LangSmithConfig(),
+        sessions=sessions or SessionConfig(),
+        skills=skills or SkillsConfig(),
     )
 
 
@@ -114,6 +120,31 @@ def _make_langsmith_config(
         framework=framework,
         tmp_path=tmp_path,
         langsmith=LangSmithConfig(enabled=True, project="test-project"),
+    )
+
+
+def _make_session_config(
+    framework: str = "langgraph",
+    tmp_path: Path | None = None,
+    maintenance_mode: str = "warn",
+) -> ScaffoldConfig:
+    """Create a config with session persistence enabled."""
+    return _make_config(
+        framework=framework,
+        tmp_path=tmp_path,
+        sessions=SessionConfig(enabled=True, maintenance_mode=maintenance_mode),
+    )
+
+
+def _make_skills_config(
+    framework: str = "langgraph",
+    tmp_path: Path | None = None,
+) -> ScaffoldConfig:
+    """Create a config with skills enabled."""
+    return _make_config(
+        framework=framework,
+        tmp_path=tmp_path,
+        skills=SkillsConfig(enabled=True),
     )
 
 
@@ -1532,3 +1563,554 @@ class TestWizardLangSmithFlow:
             mock_q.text.return_value.ask.return_value = None
             with pytest.raises(Abort):
                 _ask_langsmith("my-project")
+
+
+# ---------------------------------------------------------------------------
+# Session Config (Principle 11)
+# ---------------------------------------------------------------------------
+
+
+class TestSessionConfig:
+    """Test SessionConfig dataclass."""
+
+    def test_defaults(self) -> None:
+        config = SessionConfig()
+        assert config.enabled is False
+        assert config.storage_dir == ".agent/sessions"
+        assert config.prune_after_days == 30
+        assert config.max_entries == 500
+        assert config.rotate_bytes == 10_485_760
+        assert config.history_limit == 50
+        assert config.compaction_threshold == 50
+        assert config.maintenance_mode == "warn"
+
+    def test_enabled_with_custom_values(self) -> None:
+        config = SessionConfig(
+            enabled=True,
+            maintenance_mode="enforce",
+            history_limit=100,
+        )
+        assert config.enabled is True
+        assert config.maintenance_mode == "enforce"
+        assert config.history_limit == 100
+
+    def test_scaffold_config_default_sessions(self) -> None:
+        """ScaffoldConfig should have sessions disabled by default."""
+        config = _make_config()
+        assert config.sessions.enabled is False
+
+
+# ---------------------------------------------------------------------------
+# Sessions generation
+# ---------------------------------------------------------------------------
+
+
+class TestSessionsGeneration:
+    """Test sessions.py is generated when enabled and valid Python."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_sessions_py_exists_when_enabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_session_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        assert (output_path / "sessions.py").exists()
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_sessions_py_is_valid_python(self, framework: str, tmp_path: Path) -> None:
+        config = _make_session_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        source = (output_path / "sessions.py").read_text()
+        ast.parse(source)
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_sessions_py_has_key_classes(self, framework: str, tmp_path: Path) -> None:
+        config = _make_session_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        source = (output_path / "sessions.py").read_text()
+        tree = ast.parse(source)
+        class_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+        ]
+        for expected in [
+            "MessageRole", "SessionStore", "RepairResult", "CompactionResult",
+        ]:
+            assert expected in class_names, f"{expected} class not found in sessions.py"
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_sessions_py_has_key_functions(self, framework: str, tmp_path: Path) -> None:
+        config = _make_session_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        source = (output_path / "sessions.py").read_text()
+        tree = ast.parse(source)
+        func_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        ]
+        for expected in [
+            "build_session_key", "append_message", "load_transcript",
+            "session_write_lock", "sanitise_for_provider",
+            "repair_session_file", "compact_session",
+        ]:
+            assert expected in func_names, f"{expected} function not found in sessions.py"
+
+
+# ---------------------------------------------------------------------------
+# Sessions NOT generated when disabled
+# ---------------------------------------------------------------------------
+
+
+class TestSessionsNotGeneratedWhenDisabled:
+    """Test sessions.py is absent when sessions are disabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_sessions_py_absent_when_disabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        assert not (output_path / "sessions.py").exists()
+
+
+# ---------------------------------------------------------------------------
+# Sessions config.yaml
+# ---------------------------------------------------------------------------
+
+
+class TestSessionsConfigYaml:
+    """Test config.yaml has/lacks sessions section."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_config_yaml_has_sessions_when_enabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_session_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        config_yaml = (output_path / "config.yaml").read_text()
+        assert "sessions:" in config_yaml
+        assert "enabled: true" in config_yaml
+        assert "storage_dir:" in config_yaml
+        assert "maintenance:" in config_yaml
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_config_yaml_no_sessions_when_disabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        config_yaml = (output_path / "config.yaml").read_text()
+        assert "sessions:" not in config_yaml
+
+
+# ---------------------------------------------------------------------------
+# Sessions README
+# ---------------------------------------------------------------------------
+
+
+class TestSessionsReadme:
+    """Test README has/lacks session persistence section."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_readme_has_sessions_when_enabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_session_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        readme = (output_path / "README.md").read_text()
+        assert "Session Persistence" in readme
+        assert "sessions.maintenance.mode" in readme
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_readme_no_sessions_when_disabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        readme = (output_path / "README.md").read_text()
+        assert "## Session Persistence" not in readme
+        assert "sessions.maintenance.mode" not in readme
+
+
+# ---------------------------------------------------------------------------
+# Section 8 with sessions
+# ---------------------------------------------------------------------------
+
+
+class TestSection8WithSessions:
+    """Test agent.py contains session imports + wrapper when sessions enabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_has_session_imports_when_enabled(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_session_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        assert "from sessions import" in agent_source
+        assert "run_agent_with_session" in agent_source
+        assert "SessionStore" in agent_source
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_no_session_imports_when_disabled(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        assert "from sessions import" not in agent_source
+        assert "run_agent_with_session" not in agent_source
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_py_valid_python_with_sessions(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_session_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        ast.parse(agent_source)
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_main_block_calls_session_wrapper(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_session_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        # The __main__ block should call run_agent_with_session
+        assert "run_agent_with_session(user_query)" in agent_source
+
+
+# ---------------------------------------------------------------------------
+# Wizard session flow
+# ---------------------------------------------------------------------------
+
+
+class TestWizardSessionFlow:
+    """Test _ask_session_persistence with mocked questionary."""
+
+    def test_session_enabled(self) -> None:
+        from cli.commands.scaffold import _ask_session_persistence
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.confirm.return_value.ask.return_value = True
+            mock_q.select.return_value.ask.return_value = "warn"
+            result = _ask_session_persistence()
+            assert result.enabled is True
+            assert result.maintenance_mode == "warn"
+
+    def test_session_disabled(self) -> None:
+        from cli.commands.scaffold import _ask_session_persistence
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.confirm.return_value.ask.return_value = False
+            result = _ask_session_persistence()
+            assert result.enabled is False
+
+    def test_session_abort_on_none(self) -> None:
+        from click.exceptions import Abort
+
+        from cli.commands.scaffold import _ask_session_persistence
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.confirm.return_value.ask.return_value = None
+            with pytest.raises(Abort):
+                _ask_session_persistence()
+
+
+# ---------------------------------------------------------------------------
+# Skills Config (Principle 7)
+# ---------------------------------------------------------------------------
+
+
+class TestSkillsConfig:
+    """Test SkillsConfig dataclass."""
+
+    def test_defaults(self) -> None:
+        config = SkillsConfig()
+        assert config.enabled is False
+        assert config.skills_dir == "skills"
+        assert config.max_description_chars == 150
+        assert config.read_tool_name == "read_file"
+
+    def test_enabled(self) -> None:
+        config = SkillsConfig(enabled=True)
+        assert config.enabled is True
+
+    def test_scaffold_config_default_skills(self) -> None:
+        """ScaffoldConfig should have skills disabled by default."""
+        config = _make_config()
+        assert config.skills.enabled is False
+
+
+# ---------------------------------------------------------------------------
+# Capabilities generation
+# ---------------------------------------------------------------------------
+
+
+class TestCapabilitiesGeneration:
+    """Test capabilities.py is generated when enabled and valid Python."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_capabilities_py_exists_when_enabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_skills_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        assert (output_path / "capabilities.py").exists()
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_capabilities_py_is_valid_python(self, framework: str, tmp_path: Path) -> None:
+        config = _make_skills_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        source = (output_path / "capabilities.py").read_text()
+        ast.parse(source)
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_capabilities_py_has_key_classes(self, framework: str, tmp_path: Path) -> None:
+        config = _make_skills_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        source = (output_path / "capabilities.py").read_text()
+        tree = ast.parse(source)
+        class_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+        ]
+        for expected in [
+            "SkillSource", "SkillRequirements", "SkillMetadata",
+            "SkillSnapshot", "SnapshotCache",
+        ]:
+            assert expected in class_names, f"{expected} class not found in capabilities.py"
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_capabilities_py_has_key_functions(self, framework: str, tmp_path: Path) -> None:
+        config = _make_skills_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        source = (output_path / "capabilities.py").read_text()
+        tree = ast.parse(source)
+        func_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        ]
+        for expected in [
+            "parse_skill_file", "extract_description",
+            "scan_skill_directory", "discover_all_skills",
+            "filter_eligible_skills", "build_snapshot",
+            "format_skills_for_prompt", "build_skills_system_prompt_section",
+            "load_full_instructions", "load_resource",
+        ]:
+            assert expected in func_names, f"{expected} function not found in capabilities.py"
+
+
+# ---------------------------------------------------------------------------
+# Skills NOT generated when disabled
+# ---------------------------------------------------------------------------
+
+
+class TestSkillsNotGeneratedWhenDisabled:
+    """Test capabilities.py and skills/ are absent when skills are disabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_capabilities_py_absent_when_disabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        assert not (output_path / "capabilities.py").exists()
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_skills_dir_absent_when_disabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        assert not (output_path / "skills").exists()
+
+
+# ---------------------------------------------------------------------------
+# Skills directory
+# ---------------------------------------------------------------------------
+
+
+class TestSkillsDirectory:
+    """Test skills/example-skill/SKILL.md is generated correctly."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_example_skill_exists(self, framework: str, tmp_path: Path) -> None:
+        config = _make_skills_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        skill_file = output_path / "skills" / "example-skill" / "SKILL.md"
+        assert skill_file.exists()
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_example_skill_has_frontmatter(self, framework: str, tmp_path: Path) -> None:
+        config = _make_skills_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        skill_content = (output_path / "skills" / "example-skill" / "SKILL.md").read_text()
+        assert skill_content.startswith("---")
+        assert "description:" in skill_content
+        assert "metadata:" in skill_content
+
+
+# ---------------------------------------------------------------------------
+# Skills config.yaml
+# ---------------------------------------------------------------------------
+
+
+class TestSkillsConfigYaml:
+    """Test config.yaml has/lacks skills section."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_config_yaml_has_skills_when_enabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_skills_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        config_yaml = (output_path / "config.yaml").read_text()
+        assert "skills:" in config_yaml
+        assert "enabled: true" in config_yaml
+        assert "skills_dir:" in config_yaml
+        assert "max_description_chars:" in config_yaml
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_config_yaml_no_skills_when_disabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        config_yaml = (output_path / "config.yaml").read_text()
+        assert "skills:" not in config_yaml
+
+
+# ---------------------------------------------------------------------------
+# Skills README
+# ---------------------------------------------------------------------------
+
+
+class TestSkillsReadme:
+    """Test README has/lacks skills section."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_readme_has_skills_when_enabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_skills_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        readme = (output_path / "README.md").read_text()
+        assert "Progressive Capability Disclosure" in readme
+        assert "skills.skills_dir" in readme
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_readme_no_skills_when_disabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        readme = (output_path / "README.md").read_text()
+        assert "## Progressive Capability Disclosure" not in readme
+        assert "skills.skills_dir" not in readme
+
+
+# ---------------------------------------------------------------------------
+# Section 2 with skills
+# ---------------------------------------------------------------------------
+
+
+class TestSection2WithSkills:
+    """Test render_section_2_config() changes when skills are enabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_section_2_with_skills_has_capabilities_import(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_skills_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        assert "from capabilities import" in agent_source
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_section_2_without_skills_no_capabilities_import(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        assert "from capabilities import" not in agent_source
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_py_valid_python_with_skills(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_skills_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        ast.parse(agent_source)
+
+
+# ---------------------------------------------------------------------------
+# Section 2 with skills AND identity
+# ---------------------------------------------------------------------------
+
+
+class TestSection2WithSkillsAndIdentity:
+    """Test agent.py is valid with both skills and identity enabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_py_valid_python_with_both(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_config(
+            framework, tmp_path,
+            identity=IdentityLayerConfig(enabled=True),
+            skills=SkillsConfig(enabled=True),
+        )
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        ast.parse(agent_source)
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_py_has_both_imports(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_config(
+            framework, tmp_path,
+            identity=IdentityLayerConfig(enabled=True),
+            skills=SkillsConfig(enabled=True),
+        )
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        assert "from brief_packet import" in agent_source
+        assert "from capabilities import" in agent_source
+
+
+
