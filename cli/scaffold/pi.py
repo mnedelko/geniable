@@ -398,6 +398,12 @@ def create_agent_config() -> dict[str, Any]:
     Returns a config dict that Pi uses to set up the agent's model,
     tools, workspace, and execution parameters.
     \"\"\"
+    from tool_policy import filter_tools
+
+    # Tool Governance (Principle 9): filter tools through policy
+    all_tool_names = list(TOOL_REGISTRY.keys())
+    permitted_names = filter_tools(all_tool_names)
+
     return {{
         "model": {{
             "primary": CONFIG.model_id,
@@ -405,7 +411,7 @@ def create_agent_config() -> dict[str, Any]:
             "max_tokens": CONFIG.max_tokens,
             "temperature": CONFIG.temperature,
         }},
-        "tools": list(TOOL_REGISTRY.keys()),
+        "tools": permitted_names,
         "workspace": str(BASE_DIR),
         "operational": {{
             "max_iterations": 10,
@@ -415,13 +421,17 @@ def create_agent_config() -> dict[str, Any]:
 """
 
     def render_section_8_entrypoint(self) -> str:
+        langsmith_import = ""
+        langsmith_decorator = ""
+        if self.config.langsmith.enabled:
+            langsmith_import = "from langsmith import traceable\n\n"
+            langsmith_decorator = f'@traceable(name="{self.config.project_name}")\n'
+        main_block = self._render_main_block()
         return f"""\
 # =============================================================================
 # 8. ENTRY POINT
 # =============================================================================
-{_principle_comments(8)}
-
-def run_agent(query: str, context: dict | None = None) -> str:
+{_principle_comments(8)}{langsmith_import}{langsmith_decorator}def run_agent(query: str, context: dict | None = None) -> str:
     \"\"\"Run the agent with a query string.
 
     In a full Pi deployment, this would be invoked by the gateway
@@ -453,18 +463,5 @@ def run_agent(query: str, context: dict | None = None) -> str:
     return state.response
 
 
-if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        user_query = " ".join(sys.argv[1:])
-        print(f"Query: {{user_query}}")
-        print("=" * 60)
-        try:
-            result = run_agent(user_query)
-            print(result)
-        except RuntimeError as e:
-            print(f"Error: {{e}}")
-            sys.exit(1)
-    else:
-        print("Usage: python agent.py <query>")
-        sys.exit(1)
+{main_block}
 """

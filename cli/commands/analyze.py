@@ -1,11 +1,14 @@
 """Analysis commands for thread processing."""
 
+from __future__ import annotations
+
 import json
 import logging
 import os
 import shutil
 import subprocess
 import sys
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -32,7 +35,7 @@ def _is_inside_claude_code() -> bool:
     return os.environ.get("CLAUDECODE") == "1"
 
 
-def _output_for_claude_code(threads_json: str, config_dict: dict) -> None:
+def _output_for_claude_code(threads_json: str, config_dict: dict[str, Any]) -> None:
     """Output thread data for the current Claude Code session to analyze.
 
     When running inside Claude Code, we simply print the data and instructions.
@@ -62,7 +65,9 @@ def _output_for_claude_code(threads_json: str, config_dict: dict) -> None:
     console.print()
 
 
-def _spawn_claude_code(threads_json: str, config_dict: dict, verbose: bool = False) -> int:
+def _spawn_claude_code(
+    threads_json: str, config_dict: dict[str, Any], verbose: bool = False,
+) -> int:
     """Spawn Claude Code CLI to analyze threads.
 
     If already inside Claude Code, just output the data.

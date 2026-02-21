@@ -58,7 +58,7 @@ def get_shared_source_dir() -> Path | None:
     return None
 
 
-def _ignore_patterns(directory: str, files: list) -> set[str]:
+def _ignore_patterns(directory: str, files: list[str]) -> set[str]:
     """Return files to ignore during copy.
 
     Args:
@@ -93,7 +93,7 @@ def inject_agent_code(
     target_dir: Path,
     overwrite: bool = False,
     include_shared: bool = True,
-) -> dict:
+) -> dict[str, Any]:
     """Inject agent code into target directory.
 
     Args:
