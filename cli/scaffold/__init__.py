@@ -70,6 +70,23 @@ class SkillsConfig:
 
 
 @dataclass
+class ObservabilityConfig:
+    """Configuration for Principle 17: Observability, Audit, and Accountability."""
+
+    enabled: bool = False
+    log_dir: str = ".agent/logs"
+    transcript_dir: str = ".agent/transcripts"
+    log_level: str = "INFO"
+    cloudwatch_log_group: str = ""  # auto-detected in AWS
+    cloudwatch_region: str = ""  # defaults to agent region
+    enable_transcripts: bool = True
+    enable_cost_tracking: bool = True
+    enable_config_audit: bool = True
+    enable_prompt_log: bool = True
+    enable_diagnostics: bool = True
+
+
+@dataclass
 class ProviderModel:
     """A provider + model pair for primary or fallback."""
 
@@ -94,6 +111,7 @@ class ScaffoldConfig:
     langsmith: LangSmithConfig = field(default_factory=LangSmithConfig)
     sessions: SessionConfig = field(default_factory=SessionConfig)
     skills: SkillsConfig = field(default_factory=SkillsConfig)
+    observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
 
     def validate(self) -> None:
         """Validate configuration values."""
@@ -198,6 +216,9 @@ class ScaffoldGenerator:
             files[
                 "skills/example-skill/SKILL.md"
             ] = template.render_example_skill_md()
+
+        if self.config.observability.enabled:
+            files["observability.py"] = template.render_observability_py()
 
         if self.config.identity.enabled:
             (output_path / "identity").mkdir(exist_ok=True)

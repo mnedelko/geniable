@@ -5,10 +5,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import typer
 
 from cli.scaffold import (
     IdentityLayerConfig,
     LangSmithConfig,
+    ObservabilityConfig,
     ProviderModel,
     ScaffoldConfig,
     ScaffoldGenerator,
@@ -47,6 +49,7 @@ def _make_config(
     langsmith: LangSmithConfig | None = None,
     sessions: SessionConfig | None = None,
     skills: SkillsConfig | None = None,
+    observability: ObservabilityConfig | None = None,
 ) -> ScaffoldConfig:
     output_dir = str(tmp_path / "test-agent") if tmp_path else "./test-agent"
     return ScaffoldConfig(
@@ -65,6 +68,7 @@ def _make_config(
         langsmith=langsmith or LangSmithConfig(),
         sessions=sessions or SessionConfig(),
         skills=skills or SkillsConfig(),
+        observability=observability or ObservabilityConfig(),
     )
 
 
@@ -2113,4 +2117,347 @@ class TestSection2WithSkillsAndIdentity:
         assert "from capabilities import" in agent_source
 
 
+# ---------------------------------------------------------------------------
+# Observability helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_observability_config(
+    framework: str = "langgraph",
+    tmp_path: Path | None = None,
+) -> ScaffoldConfig:
+    """Create a config with observability enabled."""
+    return _make_config(
+        framework=framework,
+        tmp_path=tmp_path,
+        observability=ObservabilityConfig(enabled=True),
+    )
+
+
+# ---------------------------------------------------------------------------
+# ObservabilityConfig dataclass
+# ---------------------------------------------------------------------------
+
+
+class TestObservabilityConfig:
+    """Test ObservabilityConfig dataclass."""
+
+    def test_defaults(self) -> None:
+        config = ObservabilityConfig()
+        assert config.enabled is False
+        assert config.log_dir == ".agent/logs"
+        assert config.transcript_dir == ".agent/transcripts"
+        assert config.log_level == "INFO"
+        assert config.cloudwatch_log_group == ""
+        assert config.cloudwatch_region == ""
+        assert config.enable_transcripts is True
+        assert config.enable_cost_tracking is True
+        assert config.enable_config_audit is True
+        assert config.enable_prompt_log is True
+        assert config.enable_diagnostics is True
+
+    def test_enabled(self) -> None:
+        config = ObservabilityConfig(enabled=True, log_level="DEBUG")
+        assert config.enabled is True
+        assert config.log_level == "DEBUG"
+
+    def test_scaffold_config_default_observability(self) -> None:
+        """ScaffoldConfig should have observability disabled by default."""
+        config = _make_config()
+        assert config.observability.enabled is False
+
+
+# ---------------------------------------------------------------------------
+# Observability generation
+# ---------------------------------------------------------------------------
+
+
+class TestObservabilityGeneration:
+    """Test observability.py is generated when enabled and valid Python."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_observability_py_exists_when_enabled(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_observability_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        assert (output_path / "observability.py").exists()
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_observability_py_is_valid_python(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_observability_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        source = (output_path / "observability.py").read_text()
+        ast.parse(source)
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_observability_py_has_key_classes(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_observability_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        source = (output_path / "observability.py").read_text()
+        tree = ast.parse(source)
+        class_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+        ]
+        for expected in [
+            "TokenUsage", "CostBreakdown", "ModelCostConfig",
+            "SessionTranscript", "PromptLog", "ConfigAuditLog",
+            "ObservabilityContext",
+        ]:
+            assert expected in class_names, (
+                f"{expected} class not found in observability.py"
+            )
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_observability_py_has_key_functions(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_observability_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        source = (output_path / "observability.py").read_text()
+        tree = ast.parse(source)
+        func_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        ]
+        for expected in [
+            "setup_logging", "get_logger", "setup_observability",
+            "calculate_cost", "hash_content", "subscribe", "emit",
+        ]:
+            assert expected in func_names, (
+                f"{expected} function not found in observability.py"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Observability NOT generated when disabled
+# ---------------------------------------------------------------------------
+
+
+class TestObservabilityNotGeneratedWhenDisabled:
+    """Test observability.py is absent when observability is disabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_observability_py_absent_when_disabled(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        assert not (output_path / "observability.py").exists()
+
+
+# ---------------------------------------------------------------------------
+# Observability config.yaml
+# ---------------------------------------------------------------------------
+
+
+class TestObservabilityConfigYaml:
+    """Test config.yaml has/lacks observability section."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_config_yaml_has_observability_when_enabled(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_observability_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        config_yaml = (output_path / "config.yaml").read_text()
+        assert "observability:" in config_yaml
+        assert "enabled: true" in config_yaml
+        assert "log_dir:" in config_yaml
+        assert "transcript_dir:" in config_yaml
+        assert "enable_transcripts:" in config_yaml
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_config_yaml_no_observability_when_disabled(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        config_yaml = (output_path / "config.yaml").read_text()
+        assert "observability:" not in config_yaml
+
+
+# ---------------------------------------------------------------------------
+# Observability README
+# ---------------------------------------------------------------------------
+
+
+class TestObservabilityReadme:
+    """Test README has/lacks observability section."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_readme_has_observability_when_enabled(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_observability_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        readme = (output_path / "README.md").read_text()
+        assert "Operational Observability" in readme
+        assert "observability.log_level" in readme
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_readme_no_observability_when_disabled(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        readme = (output_path / "README.md").read_text()
+        assert "Operational Observability" not in readme
+        assert "observability.log_level" not in readme
+
+
+# ---------------------------------------------------------------------------
+# Section 7 with observability
+# ---------------------------------------------------------------------------
+
+
+class TestSection7WithObservability:
+    """Test agent.py section 7 integrates observability when enabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_py_has_observability_imports(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_observability_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        assert "from observability import" in agent_source
+        assert "setup_observability" in agent_source
+        assert "get_logger" in agent_source
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_py_valid_python_with_observability(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_observability_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        ast.parse(agent_source)
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_py_no_observability_imports_when_disabled(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        assert "from observability import" not in agent_source
+
+
+# ---------------------------------------------------------------------------
+# Observability .env.example
+# ---------------------------------------------------------------------------
+
+
+class TestObservabilityEnv:
+    """Test .env.example has/lacks CloudWatch vars."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_env_has_cloudwatch_when_enabled(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_observability_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        env = (output_path / ".env.example").read_text()
+        assert "CLOUDWATCH_LOG_GROUP" in env
+        assert "CLOUDWATCH_REGION" in env
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_env_no_cloudwatch_when_disabled(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        env = (output_path / ".env.example").read_text()
+        assert "CLOUDWATCH_LOG_GROUP" not in env
+        assert "CLOUDWATCH_REGION" not in env
+
+
+# ---------------------------------------------------------------------------
+# Wizard observability flow
+# ---------------------------------------------------------------------------
+
+
+class TestWizardObservabilityFlow:
+    """Test the wizard _ask_observability() function."""
+
+    def test_observability_enabled(self) -> None:
+        from cli.commands.scaffold import _ask_observability
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.confirm.return_value.ask.return_value = True
+            result = _ask_observability()
+            assert result.enabled is True
+
+    def test_observability_disabled(self) -> None:
+        from cli.commands.scaffold import _ask_observability
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.confirm.return_value.ask.return_value = False
+            result = _ask_observability()
+            assert result.enabled is False
+
+    def test_observability_abort(self) -> None:
+        from cli.commands.scaffold import _ask_observability
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.confirm.return_value.ask.return_value = None
+            with pytest.raises(typer.Abort):
+                _ask_observability()
+
+
+# ---------------------------------------------------------------------------
+# Observability + LangSmith combined
+# ---------------------------------------------------------------------------
+
+
+class TestObservabilityWithLangSmith:
+    """Test observability.py and LangSmith tracing work together."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_py_valid_with_both(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_config(
+            framework, tmp_path,
+            langsmith=LangSmithConfig(enabled=True, project="test"),
+            observability=ObservabilityConfig(enabled=True),
+        )
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        ast.parse(agent_source)
+        assert "from observability import" in agent_source
 
