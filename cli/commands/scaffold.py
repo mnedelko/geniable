@@ -10,6 +10,7 @@ from cli.output_formatter import print_error, print_info, print_success
 from cli.scaffold import (
     IdentityLayerConfig,
     LangSmithConfig,
+    ObservabilityConfig,
     SessionConfig,
     ToolGovernanceConfig,
 )
@@ -425,6 +426,26 @@ def _ask_session_persistence() -> SessionConfig:
     return SessionConfig(enabled=True, maintenance_mode=maintenance_mode)
 
 
+def _ask_observability() -> ObservabilityConfig:
+    """Ask user about operational observability configuration (Principle 17).
+
+    Returns:
+        ObservabilityConfig with user selections.
+    """
+    enable = questionary.confirm(
+        "Enable operational observability? (Principle 17: Structured logging, audit, cost tracking)",
+        default=False,
+    ).ask()
+
+    if enable is None:
+        raise typer.Abort()
+
+    if not enable:
+        return ObservabilityConfig(enabled=False)
+
+    return ObservabilityConfig(enabled=True)
+
+
 @app.command("create")
 def create() -> None:
     """Create a new agent project from a template.
@@ -541,6 +562,12 @@ def create() -> None:
     console.print("\n[cyan]Session Persistence (Principle 11: Conversation State)[/cyan]")
     session_config = _ask_session_persistence()
 
+    # 12. Operational observability (Principle 17)
+    console.print(
+        "\n[cyan]Operational Observability (Principle 17: Logging, Audit, Cost Tracking)[/cyan]"
+    )
+    observability_config = _ask_observability()
+
     # Generate
     from cli.scaffold import ScaffoldConfig, ScaffoldGenerator
 
@@ -556,6 +583,7 @@ def create() -> None:
         tool_governance=tool_governance_config,
         langsmith=langsmith_config,
         sessions=session_config,
+        observability=observability_config,
     )
 
     try:

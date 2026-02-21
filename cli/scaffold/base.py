@@ -266,6 +266,22 @@ CONFIG = Config()
 """
 
     def render_section_7_utilities(self) -> str:
+        if self.config.observability.enabled:
+            return f"""\
+# =============================================================================
+# 7. UTILITIES
+# =============================================================================
+{_principle_comments(7)}
+from observability import setup_observability, get_logger
+
+_obs = setup_observability()
+logger = get_logger("agent")
+
+
+def log_invocation(action: str, detail: str = "") -> None:
+    \"\"\"Structured log entry for observability.\"\"\"
+    logger.info(action, {{"detail": detail}})
+"""
         return f"""\
 # =============================================================================
 # 7. UTILITIES
@@ -1145,6 +1161,921 @@ def validate_tool_config(config_path: Path | None = None) -> list[str]:
 '''
 
     # ------------------------------------------------------------------
+    # observability.py — Operational Observability (Principle 17)
+    # ------------------------------------------------------------------
+
+    def render_observability_py(self) -> str:
+        """Render the complete observability.py for the generated project.
+
+        Implements Principle 17: Observability, Audit, and Accountability —
+        consolidates 7 blueprint modules into a single file:
+        1. Types, 2. Structured Logger, 3. Session Transcript,
+        4. Usage/Cost, 5. Prompt Log, 6. Config Audit,
+        7. Diagnostic Events, 8. Setup/Integration.
+        """
+        return '''\
+"""Operational Observability — structured logging, audit, and accountability.
+
+Principle 17: Observability, Audit, and Accountability — provides:
+- Structured JSON logging with dual-destination (CloudWatch/local)
+- Session transcript recording (append-only JSONL)
+- Per-invocation cost tracking with model-aware pricing
+- Prompt snapshot logging for forensic replay
+- Configuration audit with hash-based change detection
+- Pluggable diagnostic event system
+
+Sections:
+    - Types (MessageRole, TokenUsage, CostBreakdown, ModelCostConfig,
+             ToolCallRecord, MessageRecord, ConfigAuditRecord, DiagnosticEvent)
+    - Structured Logger (LogLevel, JsonFormatter, setup_logging, get_logger)
+    - Session Transcript (SessionTranscript)
+    - Usage/Cost (DEFAULT_COSTS, resolve_cost_config, calculate_cost,
+                  aggregate_usage, aggregate_cost)
+    - Prompt Log (PromptLog)
+    - Config Audit (hash_content, collect_changed_paths,
+                    detect_suspicious_changes, ConfigAuditLog)
+    - Diagnostic Events (subscribe, emit, emit_model_usage,
+                         emit_message_processed, emit_tool_executed,
+                         jsonl_file_listener, cloudwatch_listener)
+    - Setup/Integration (ObservabilityContext, setup_observability)
+"""
+
+from __future__ import annotations
+
+import enum
+import hashlib
+import json
+import logging
+import os
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable
+
+
+# =============================================================================
+# 1. TYPES
+# =============================================================================
+
+
+class MessageRole(str, enum.Enum):
+    """Role of a message in a conversation."""
+
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
+    SYSTEM = "system"
+
+
+@dataclass
+class TokenUsage:
+    """Token usage statistics for a single invocation."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+
+
+@dataclass
+class CostBreakdown:
+    """Cost breakdown for a single invocation."""
+
+    input_cost: float = 0.0
+    output_cost: float = 0.0
+    total_cost: float = 0.0
+    model_id: str = ""
+    provider: str = ""
+
+
+@dataclass
+class ModelCostConfig:
+    """Per-model pricing configuration (per 1K tokens)."""
+
+    input_cost_per_1k: float = 0.0
+    output_cost_per_1k: float = 0.0
+    model_id: str = ""
+
+
+@dataclass
+class ToolCallRecord:
+    """Record of a tool invocation."""
+
+    tool_name: str
+    params: dict[str, Any] = field(default_factory=dict)
+    result_summary: str = ""
+    duration_ms: float = 0.0
+    is_error: bool = False
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+
+@dataclass
+class MessageRecord:
+    """Record of a single message for transcript logging."""
+
+    role: str
+    content: str | None = None
+    model: str | None = None
+    provider: str | None = None
+    usage: TokenUsage | None = None
+    tool_calls: list[ToolCallRecord] | None = None
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+
+@dataclass
+class ConfigAuditRecord:
+    """Record of a configuration state or change."""
+
+    path: str
+    hash_before: str = ""
+    hash_after: str = ""
+    changed: bool = False
+    suspicious: bool = False
+    reason: str = ""
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+
+@dataclass
+class DiagnosticEvent:
+    """A diagnostic event for the event system."""
+
+    event_type: str
+    subsystem: str = ""
+    data: dict[str, Any] = field(default_factory=dict)
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    severity: str = "info"
+
+
+# =============================================================================
+# 2. STRUCTURED LOGGER
+# =============================================================================
+
+
+class LogLevel(str, enum.Enum):
+    """Supported log levels."""
+
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+    CRITICAL = "CRITICAL"
+
+
+class JsonFormatter(logging.Formatter):
+    """JSON log formatter for structured logging."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_entry: dict[str, Any] = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if hasattr(record, "extra_data") and record.extra_data:
+            log_entry["data"] = record.extra_data
+        if record.exc_info and record.exc_info[1]:
+            log_entry["error"] = {
+                "type": type(record.exc_info[1]).__name__,
+                "message": str(record.exc_info[1]),
+            }
+        return json.dumps(log_entry, default=str)
+
+
+def _is_aws_environment() -> bool:
+    """Auto-detect if running in AWS (Lambda, ECS, EC2)."""
+    return any(
+        os.environ.get(v)
+        for v in (
+            "AWS_LAMBDA_FUNCTION_NAME",
+            "ECS_CONTAINER_METADATA_URI",
+            "AWS_EXECUTION_ENV",
+        )
+    )
+
+
+def _local_file_handler(
+    log_dir: str, subsystem: str
+) -> logging.FileHandler:
+    """Create a local file handler for structured logs."""
+    log_path = Path(log_dir)
+    log_path.mkdir(parents=True, exist_ok=True)
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    handler = logging.FileHandler(
+        log_path / f"{subsystem}_{date_str}.jsonl",
+        encoding="utf-8",
+    )
+    return handler
+
+
+def setup_logging(
+    subsystem: str = "agent",
+    log_dir: str = ".agent/logs",
+    log_level: str = "INFO",
+    cloudwatch_log_group: str = "",
+    cloudwatch_region: str = "",
+) -> logging.Logger:
+    """Set up structured logging with dual-destination support.
+
+    Routes to CloudWatch when running in AWS with a configured log group,
+    otherwise falls back to local JSONL files.
+
+    Args:
+        subsystem: Logger name / CloudWatch stream name.
+        log_dir: Local directory for log files.
+        log_level: Minimum log level.
+        cloudwatch_log_group: CloudWatch log group name (empty = skip).
+        cloudwatch_region: AWS region for CloudWatch.
+
+    Returns:
+        Configured logger instance.
+    """
+    logger = logging.getLogger(subsystem)
+    logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
+
+    # Avoid duplicate handlers on repeated calls
+    if logger.handlers:
+        return logger
+
+    handler: logging.Handler
+    if _is_aws_environment() and cloudwatch_log_group:
+        try:
+            import watchtower  # type: ignore[import-untyped]
+
+            kwargs: dict[str, Any] = {
+                "log_group_name": cloudwatch_log_group,
+                "stream_name": subsystem,
+            }
+            if cloudwatch_region:
+                import boto3  # type: ignore[import-untyped]
+
+                kwargs["boto3_client"] = boto3.client(
+                    "logs", region_name=cloudwatch_region
+                )
+            handler = watchtower.CloudWatchLogHandler(**kwargs)
+        except ImportError:
+            handler = _local_file_handler(log_dir, subsystem)
+    else:
+        handler = _local_file_handler(log_dir, subsystem)
+
+    handler.setFormatter(JsonFormatter())
+    logger.addHandler(handler)
+    return logger
+
+
+def get_logger(subsystem: str = "agent") -> logging.Logger:
+    """Get an existing logger by subsystem name.
+
+    If the logger has no handlers, sets up a basic local logger.
+    """
+    logger = logging.getLogger(subsystem)
+    if not logger.handlers:
+        return setup_logging(subsystem)
+    return logger
+
+
+# =============================================================================
+# 3. SESSION TRANSCRIPT
+# =============================================================================
+
+
+class SessionTranscript:
+    """Append-only JSONL session transcript recorder.
+
+    Creates a forensic-grade log of all messages in a session,
+    stored as one JSON object per line.
+    """
+
+    def __init__(
+        self,
+        transcript_dir: str = ".agent/transcripts",
+        session_id: str = "",
+    ) -> None:
+        self.transcript_dir = Path(transcript_dir)
+        self.transcript_dir.mkdir(parents=True, exist_ok=True)
+        self.session_id = session_id or datetime.now(timezone.utc).strftime(
+            "%Y%m%d_%H%M%S"
+        )
+        self.transcript_path = self.transcript_dir / f"{self.session_id}.jsonl"
+        self._write_header()
+
+    def _write_header(self) -> None:
+        """Write session header if file is new."""
+        if self.transcript_path.exists() and self.transcript_path.stat().st_size > 0:
+            return
+        header = {
+            "type": "session",
+            "version": "1.0",
+            "id": self.session_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        with open(self.transcript_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(header, separators=(",", ":")) + "\\n")
+
+    def append(self, record: MessageRecord) -> None:
+        """Append a message record to the transcript."""
+        entry: dict[str, Any] = {
+            "type": "message",
+            "role": record.role,
+            "timestamp": record.timestamp,
+        }
+        if record.content is not None:
+            entry["content"] = record.content
+        if record.model:
+            entry["model"] = record.model
+        if record.provider:
+            entry["provider"] = record.provider
+        if record.usage:
+            entry["usage"] = {
+                "input": record.usage.input_tokens,
+                "output": record.usage.output_tokens,
+                "total": record.usage.total_tokens,
+            }
+        if record.tool_calls:
+            entry["tool_calls"] = [
+                {
+                    "name": tc.tool_name,
+                    "duration_ms": tc.duration_ms,
+                    "is_error": tc.is_error,
+                }
+                for tc in record.tool_calls
+            ]
+        with open(self.transcript_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, separators=(",", ":")) + "\\n")
+
+    def load_messages(self) -> list[dict[str, Any]]:
+        """Load all message entries from the transcript."""
+        if not self.transcript_path.exists():
+            return []
+        messages: list[dict[str, Any]] = []
+        with open(self.transcript_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    if entry.get("type") == "message":
+                        messages.append(entry)
+                except json.JSONDecodeError:
+                    continue
+        return messages
+
+    @property
+    def message_count(self) -> int:
+        """Number of messages in the transcript."""
+        return len(self.load_messages())
+
+
+# =============================================================================
+# 4. USAGE / COST
+# =============================================================================
+
+
+DEFAULT_COSTS: dict[str, ModelCostConfig] = {
+    "anthropic.claude-sonnet-4-20250514-v1:0": ModelCostConfig(
+        input_cost_per_1k=0.003, output_cost_per_1k=0.015,
+        model_id="anthropic.claude-sonnet-4-20250514-v1:0",
+    ),
+    "anthropic.claude-haiku-4-5-20251001-v1:0": ModelCostConfig(
+        input_cost_per_1k=0.0008, output_cost_per_1k=0.004,
+        model_id="anthropic.claude-haiku-4-5-20251001-v1:0",
+    ),
+    "anthropic.claude-opus-4-20250514-v1:0": ModelCostConfig(
+        input_cost_per_1k=0.015, output_cost_per_1k=0.075,
+        model_id="anthropic.claude-opus-4-20250514-v1:0",
+    ),
+    "gpt-4o": ModelCostConfig(
+        input_cost_per_1k=0.005, output_cost_per_1k=0.015,
+        model_id="gpt-4o",
+    ),
+    "gpt-4o-mini": ModelCostConfig(
+        input_cost_per_1k=0.00015, output_cost_per_1k=0.0006,
+        model_id="gpt-4o-mini",
+    ),
+    "gemini-2.0-flash": ModelCostConfig(
+        input_cost_per_1k=0.0001, output_cost_per_1k=0.0004,
+        model_id="gemini-2.0-flash",
+    ),
+    "gemini-2.5-pro-preview-05-06": ModelCostConfig(
+        input_cost_per_1k=0.00125, output_cost_per_1k=0.01,
+        model_id="gemini-2.5-pro-preview-05-06",
+    ),
+}
+
+
+def resolve_cost_config(
+    model_id: str,
+    custom_costs: dict[str, ModelCostConfig] | None = None,
+) -> ModelCostConfig:
+    """Resolve cost configuration for a model.
+
+    Checks custom costs first, then falls back to DEFAULT_COSTS.
+    Returns a zero-cost config if the model is unknown.
+    """
+    if custom_costs and model_id in custom_costs:
+        return custom_costs[model_id]
+    return DEFAULT_COSTS.get(
+        model_id, ModelCostConfig(model_id=model_id)
+    )
+
+
+def calculate_cost(
+    usage: TokenUsage, model_id: str,
+    custom_costs: dict[str, ModelCostConfig] | None = None,
+) -> CostBreakdown:
+    """Calculate cost for a single invocation.
+
+    Args:
+        usage: Token usage from the invocation.
+        model_id: The model identifier.
+        custom_costs: Optional custom pricing overrides.
+
+    Returns:
+        CostBreakdown with input/output/total costs.
+    """
+    cost_cfg = resolve_cost_config(model_id, custom_costs)
+    input_cost = (usage.input_tokens / 1000.0) * cost_cfg.input_cost_per_1k
+    output_cost = (usage.output_tokens / 1000.0) * cost_cfg.output_cost_per_1k
+    return CostBreakdown(
+        input_cost=input_cost,
+        output_cost=output_cost,
+        total_cost=input_cost + output_cost,
+        model_id=model_id,
+    )
+
+
+def aggregate_usage(usages: list[TokenUsage]) -> TokenUsage:
+    """Aggregate multiple TokenUsage records into one."""
+    return TokenUsage(
+        input_tokens=sum(u.input_tokens for u in usages),
+        output_tokens=sum(u.output_tokens for u in usages),
+        total_tokens=sum(u.total_tokens for u in usages),
+    )
+
+
+def aggregate_cost(breakdowns: list[CostBreakdown]) -> CostBreakdown:
+    """Aggregate multiple CostBreakdown records into one."""
+    return CostBreakdown(
+        input_cost=sum(b.input_cost for b in breakdowns),
+        output_cost=sum(b.output_cost for b in breakdowns),
+        total_cost=sum(b.total_cost for b in breakdowns),
+    )
+
+
+# =============================================================================
+# 5. PROMPT LOG
+# =============================================================================
+
+
+class PromptLog:
+    """Per-invocation prompt snapshot logger.
+
+    Captures the exact system prompt used for each invocation,
+    enabling forensic replay and prompt drift detection.
+    """
+
+    def __init__(self, log_dir: str = ".agent/logs") -> None:
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.log_path = self.log_dir / "prompts.jsonl"
+
+    def log_prompt(
+        self,
+        prompt_text: str,
+        model_id: str = "",
+        session_id: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Log a prompt snapshot."""
+        entry = {
+            "type": "prompt",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "prompt_hash": hashlib.sha256(
+                prompt_text.encode()
+            ).hexdigest()[:16],
+            "prompt_length": len(prompt_text),
+            "prompt_text": prompt_text,
+            "model_id": model_id,
+            "session_id": session_id,
+        }
+        if metadata:
+            entry["metadata"] = metadata
+        with open(self.log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, separators=(",", ":")) + "\\n")
+
+    def load_prompts(self) -> list[dict[str, Any]]:
+        """Load all prompt entries."""
+        if not self.log_path.exists():
+            return []
+        prompts: list[dict[str, Any]] = []
+        with open(self.log_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    prompts.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        return prompts
+
+
+# =============================================================================
+# 6. CONFIG AUDIT
+# =============================================================================
+
+
+def hash_content(content: str) -> str:
+    """Create a SHA-256 hash of content (first 16 hex chars)."""
+    return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+
+def collect_changed_paths(
+    before: dict[str, str], after: dict[str, str]
+) -> list[ConfigAuditRecord]:
+    """Compare before/after config hashes and identify changes.
+
+    Args:
+        before: Dict of path -> content hash before.
+        after: Dict of path -> content hash after.
+
+    Returns:
+        List of ConfigAuditRecord for changed paths.
+    """
+    records: list[ConfigAuditRecord] = []
+    all_paths = set(before.keys()) | set(after.keys())
+    for path in sorted(all_paths):
+        h_before = before.get(path, "")
+        h_after = after.get(path, "")
+        if h_before != h_after:
+            records.append(
+                ConfigAuditRecord(
+                    path=path,
+                    hash_before=h_before,
+                    hash_after=h_after,
+                    changed=True,
+                )
+            )
+    return records
+
+
+def detect_suspicious_changes(
+    records: list[ConfigAuditRecord],
+    sensitive_patterns: list[str] | None = None,
+) -> list[ConfigAuditRecord]:
+    """Flag suspicious config changes based on sensitive patterns.
+
+    Args:
+        records: List of change records to check.
+        sensitive_patterns: File path patterns considered sensitive
+            (defaults to common config files).
+
+    Returns:
+        Records with suspicious=True for flagged changes.
+    """
+    if sensitive_patterns is None:
+        sensitive_patterns = [
+            "config.yaml", ".env", "credentials",
+            "secret", "key", "token", "auth",
+        ]
+    for record in records:
+        for pattern in sensitive_patterns:
+            if pattern.lower() in record.path.lower():
+                record.suspicious = True
+                record.reason = f"Sensitive pattern matched: {pattern}"
+                break
+    return records
+
+
+class ConfigAuditLog:
+    """Configuration audit logger.
+
+    Tracks config file states and detects changes between snapshots.
+    """
+
+    def __init__(self, log_dir: str = ".agent/logs") -> None:
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.log_path = self.log_dir / "config_audit.jsonl"
+
+    def snapshot(
+        self, config_paths: list[str],
+    ) -> dict[str, str]:
+        """Take a hash snapshot of the given config files.
+
+        Args:
+            config_paths: List of file paths to hash.
+
+        Returns:
+            Dict of path -> content hash.
+        """
+        hashes: dict[str, str] = {}
+        for path in config_paths:
+            p = Path(path)
+            if p.exists():
+                hashes[path] = hash_content(p.read_text())
+            else:
+                hashes[path] = ""
+        return hashes
+
+    def log_audit(
+        self, records: list[ConfigAuditRecord],
+    ) -> None:
+        """Write audit records to the log."""
+        for record in records:
+            entry = {
+                "type": "config_audit",
+                "path": record.path,
+                "hash_before": record.hash_before,
+                "hash_after": record.hash_after,
+                "changed": record.changed,
+                "suspicious": record.suspicious,
+                "reason": record.reason,
+                "timestamp": record.timestamp,
+            }
+            with open(self.log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, separators=(",", ":")) + "\\n")
+
+    def check_and_log(
+        self,
+        before: dict[str, str],
+        after: dict[str, str],
+    ) -> list[ConfigAuditRecord]:
+        """Compare snapshots, detect suspicious changes, and log."""
+        changed = collect_changed_paths(before, after)
+        flagged = detect_suspicious_changes(changed)
+        if flagged:
+            self.log_audit(flagged)
+        return flagged
+
+
+# =============================================================================
+# 7. DIAGNOSTIC EVENTS
+# =============================================================================
+
+# Global subscriber registry
+_subscribers: dict[str, list[Callable[[DiagnosticEvent], None]]] = {}
+
+
+def subscribe(
+    event_type: str,
+    listener: Callable[[DiagnosticEvent], None],
+) -> None:
+    """Subscribe a listener to a diagnostic event type.
+
+    Args:
+        event_type: Event type to listen for (or "*" for all events).
+        listener: Callable that receives a DiagnosticEvent.
+    """
+    if event_type not in _subscribers:
+        _subscribers[event_type] = []
+    _subscribers[event_type].append(listener)
+
+
+def emit(event: DiagnosticEvent) -> None:
+    """Emit a diagnostic event to all subscribers.
+
+    Notifies type-specific subscribers and wildcard ("*") subscribers.
+    """
+    for listener in _subscribers.get(event.event_type, []):
+        try:
+            listener(event)
+        except Exception:
+            pass  # Never let listener errors break the pipeline
+
+    for listener in _subscribers.get("*", []):
+        try:
+            listener(event)
+        except Exception:
+            pass
+
+
+def emit_model_usage(
+    model_id: str,
+    provider: str,
+    usage: TokenUsage,
+    duration_ms: float = 0.0,
+) -> None:
+    """Emit a model usage diagnostic event."""
+    emit(
+        DiagnosticEvent(
+            event_type="model_usage",
+            subsystem="llm",
+            data={
+                "model_id": model_id,
+                "provider": provider,
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+                "total_tokens": usage.total_tokens,
+                "duration_ms": duration_ms,
+            },
+        )
+    )
+
+
+def emit_message_processed(
+    role: str, content_length: int, model: str = "",
+) -> None:
+    """Emit a message processed diagnostic event."""
+    emit(
+        DiagnosticEvent(
+            event_type="message_processed",
+            subsystem="agent",
+            data={
+                "role": role,
+                "content_length": content_length,
+                "model": model,
+            },
+        )
+    )
+
+
+def emit_tool_executed(
+    tool_name: str,
+    duration_ms: float,
+    is_error: bool = False,
+) -> None:
+    """Emit a tool execution diagnostic event."""
+    emit(
+        DiagnosticEvent(
+            event_type="tool_executed",
+            subsystem="tools",
+            data={
+                "tool_name": tool_name,
+                "duration_ms": duration_ms,
+                "is_error": is_error,
+            },
+        )
+    )
+
+
+def jsonl_file_listener(
+    log_dir: str = ".agent/logs",
+) -> Callable[[DiagnosticEvent], None]:
+    """Create a JSONL file listener for diagnostic events.
+
+    Returns:
+        A listener function that writes events to a JSONL file.
+    """
+    log_path = Path(log_dir)
+    log_path.mkdir(parents=True, exist_ok=True)
+    event_file = log_path / "events.jsonl"
+
+    def _listener(event: DiagnosticEvent) -> None:
+        entry = {
+            "event_type": event.event_type,
+            "subsystem": event.subsystem,
+            "data": event.data,
+            "timestamp": event.timestamp,
+            "severity": event.severity,
+        }
+        with open(event_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, separators=(",", ":")) + "\\n")
+
+    return _listener
+
+
+def cloudwatch_listener(
+    log_group: str,
+    stream_name: str = "diagnostics",
+    region: str = "",
+) -> Callable[[DiagnosticEvent], None]:
+    """Create a CloudWatch listener for diagnostic events.
+
+    Returns:
+        A listener function that sends events to CloudWatch.
+    """
+
+    def _listener(event: DiagnosticEvent) -> None:
+        try:
+            import boto3  # type: ignore[import-untyped]
+
+            kwargs: dict[str, Any] = {"region_name": region} if region else {}
+            client = boto3.client("logs", **kwargs)
+            client.put_log_events(
+                logGroupName=log_group,
+                logStreamName=stream_name,
+                logEvents=[
+                    {
+                        "timestamp": int(time.time() * 1000),
+                        "message": json.dumps(
+                            {
+                                "event_type": event.event_type,
+                                "subsystem": event.subsystem,
+                                "data": event.data,
+                                "severity": event.severity,
+                            }
+                        ),
+                    }
+                ],
+            )
+        except Exception:
+            pass  # Graceful degradation — never break the pipeline
+
+    return _listener
+
+
+# =============================================================================
+# 8. SETUP / INTEGRATION
+# =============================================================================
+
+
+@dataclass
+class ObservabilityContext:
+    """Holds initialised observability components."""
+
+    logger: logging.Logger
+    transcript: SessionTranscript | None = None
+    prompt_log: PromptLog | None = None
+    config_audit: ConfigAuditLog | None = None
+    log_dir: str = ".agent/logs"
+    transcript_dir: str = ".agent/transcripts"
+
+
+def setup_observability(
+    subsystem: str = "agent",
+    log_dir: str = ".agent/logs",
+    transcript_dir: str = ".agent/transcripts",
+    log_level: str = "INFO",
+    cloudwatch_log_group: str = "",
+    cloudwatch_region: str = "",
+    enable_transcripts: bool = True,
+    enable_cost_tracking: bool = True,
+    enable_config_audit: bool = True,
+    enable_prompt_log: bool = True,
+    enable_diagnostics: bool = True,
+) -> ObservabilityContext:
+    """One-call setup for all observability components.
+
+    Reads configuration and initialises the logger, transcript,
+    prompt log, config audit, and diagnostic event system.
+
+    Args:
+        subsystem: Logger name / CloudWatch stream name.
+        log_dir: Local directory for log files.
+        transcript_dir: Directory for session transcripts.
+        log_level: Minimum log level.
+        cloudwatch_log_group: CloudWatch log group (empty = local only).
+        cloudwatch_region: AWS region for CloudWatch.
+        enable_transcripts: Enable session transcript recording.
+        enable_cost_tracking: Enable cost tracking (reserved).
+        enable_config_audit: Enable config audit logging.
+        enable_prompt_log: Enable prompt snapshot logging.
+        enable_diagnostics: Enable diagnostic event system.
+
+    Returns:
+        ObservabilityContext with all initialised components.
+    """
+    obs_logger = setup_logging(
+        subsystem=subsystem,
+        log_dir=log_dir,
+        log_level=log_level,
+        cloudwatch_log_group=cloudwatch_log_group,
+        cloudwatch_region=cloudwatch_region,
+    )
+
+    transcript = None
+    if enable_transcripts:
+        transcript = SessionTranscript(transcript_dir=transcript_dir)
+
+    prompt_log = None
+    if enable_prompt_log:
+        prompt_log = PromptLog(log_dir=log_dir)
+
+    config_audit = None
+    if enable_config_audit:
+        config_audit = ConfigAuditLog(log_dir=log_dir)
+
+    if enable_diagnostics:
+        file_listener = jsonl_file_listener(log_dir=log_dir)
+        subscribe("*", file_listener)
+
+        if _is_aws_environment() and cloudwatch_log_group:
+            cw_listener = cloudwatch_listener(
+                log_group=cloudwatch_log_group,
+                region=cloudwatch_region,
+            )
+            subscribe("*", cw_listener)
+
+    return ObservabilityContext(
+        logger=obs_logger,
+        transcript=transcript,
+        prompt_log=prompt_log,
+        config_audit=config_audit,
+        log_dir=log_dir,
+        transcript_dir=transcript_dir,
+    )
+'''
+
+    # ------------------------------------------------------------------
     # Support files
     # ------------------------------------------------------------------
 
@@ -1214,7 +2145,7 @@ operational:
   max_iterations: 10
   timeout_seconds: 120
   log_level: "INFO"
-{self._render_langsmith_config_yaml()}{self._render_session_config_yaml()}{self._render_identity_config_yaml()}{self._render_skills_config_yaml()}"""
+{self._render_langsmith_config_yaml()}{self._render_session_config_yaml()}{self._render_identity_config_yaml()}{self._render_skills_config_yaml()}{self._render_observability_config_yaml()}"""
 
     def render_pyproject_toml(self) -> str:
         deps = ['    "pydantic>=2.0.0"', '    "pyyaml>=6.0.0"']
@@ -1232,6 +2163,9 @@ operational:
 
         if self.config.langsmith.enabled:
             deps.append('    "langsmith>=0.1.0"')
+
+        if self.config.observability.enabled:
+            deps.append('    "watchtower>=3.0.0"')
 
         for d in self.framework_dependencies:
             deps.append(f'    "{d}"')
@@ -1376,7 +2310,7 @@ This project includes a tool policy module (`tool_policy.py`) that provides:
 - **Sub-agent restrictions** — hardcoded deny list prevents sub-agents from accessing orchestration tools
 
 Configure tool access in `config.yaml` under the `tools` section.
-{self._render_readme_langsmith()}{self._render_readme_session_persistence()}{self._render_readme_skills()}
+{self._render_readme_langsmith()}{self._render_readme_session_persistence()}{self._render_readme_skills()}{self._render_readme_observability()}
 ## Design Principles
 
 This project is built on 20 agent engineering principles for production systems:
@@ -1398,12 +2332,13 @@ Key settings:
 - **tools.profile** — Tool access level (minimal/coding/full)
 - **tools.deny** — Explicit deny list (always wins over allow)
 - **tools.sub_agent_restrictions** — Enable sub-agent tool restrictions
-- **operational.max_iterations** — Tool loop iteration limit{self._render_readme_langsmith_config_line()}{self._render_readme_session_config_line()}{self._render_readme_skills_config_line()}
+- **operational.max_iterations** — Tool loop iteration limit{self._render_readme_langsmith_config_line()}{self._render_readme_session_config_line()}{self._render_readme_skills_config_line()}{self._render_readme_observability_config_line()}
 """
 
     def render_makefile(self) -> str:
         sessions_target = " sessions.py" if self.config.sessions.enabled else ""
         capabilities_target = " capabilities.py" if self.config.skills.enabled else ""
+        observability_target = " observability.py" if self.config.observability.enabled else ""
         return f"""\
 .PHONY: lint format typecheck test run clean
 
@@ -1415,7 +2350,7 @@ format:
 \tisort .
 
 typecheck:
-\tmypy agent.py resilience.py tool_policy.py{sessions_target}{capabilities_target}
+\tmypy agent.py resilience.py tool_policy.py{sessions_target}{capabilities_target}{observability_target}
 
 test:
 \tpytest tests/ -v
@@ -1472,6 +2407,15 @@ clean:
                 "LANGCHAIN_API_KEY=lsv2_...",
                 f"LANGCHAIN_PROJECT={self.config.langsmith.project}",
                 "# LANGCHAIN_ENDPOINT=https://api.smith.langchain.com",
+                "",
+            ])
+
+        if self.config.observability.enabled:
+            lines.extend([
+                "# Operational Observability (Principle 17)",
+                "# CloudWatch destination (auto-detected in AWS, ignored locally)",
+                "CLOUDWATCH_LOG_GROUP=",
+                "CLOUDWATCH_REGION=",
                 "",
             ])
 
@@ -1613,7 +2557,7 @@ class TestConfig:
         ]
         assert "Config" in class_names, "Config class not found in agent.py"
         assert "EvaluatorOutput" in class_names, "EvaluatorOutput class not found"
-{self._render_test_tracing()}{self._render_test_sessions()}{self._render_test_skills()}"""
+{self._render_test_tracing()}{self._render_test_sessions()}{self._render_test_skills()}{self._render_test_observability()}"""
 
     # ------------------------------------------------------------------
     # sessions.py — Session Persistence (Principle 11)
@@ -2950,6 +3894,123 @@ class TestCapabilitiesSyntax:
             "load_full_instructions", "load_resource",
         ]:
             assert expected in func_names, f"{expected} function not found in capabilities.py"
+"""
+
+    # ------------------------------------------------------------------
+    # Observability helpers (Principle 17)
+    # ------------------------------------------------------------------
+
+    def _render_observability_config_yaml(self) -> str:
+        """Render the observability section of config.yaml, or empty string."""
+        if not self.config.observability.enabled:
+            return ""
+        obs = self.config.observability
+        cw_group = obs.cloudwatch_log_group or "# auto-detected in AWS"
+        cw_region = obs.cloudwatch_region or "# defaults to agent region"
+        return f"""
+observability:
+  enabled: true
+  log_dir: "{obs.log_dir}"
+  transcript_dir: "{obs.transcript_dir}"
+  log_level: "{obs.log_level}"
+  cloudwatch_log_group: "{cw_group}"
+  cloudwatch_region: "{cw_region}"
+  enable_transcripts: {str(obs.enable_transcripts).lower()}
+  enable_cost_tracking: {str(obs.enable_cost_tracking).lower()}
+  enable_config_audit: {str(obs.enable_config_audit).lower()}
+  enable_prompt_log: {str(obs.enable_prompt_log).lower()}
+  enable_diagnostics: {str(obs.enable_diagnostics).lower()}
+"""
+
+    def _render_readme_observability(self) -> str:
+        """Render the Operational Observability section for README, or empty string."""
+        if not self.config.observability.enabled:
+            return ""
+        return """
+## Operational Observability (Principle 17)
+
+This project includes an observability module (`observability.py`) that provides
+structured logging, audit, and accountability — complementing LangSmith tracing
+with operational concerns that LangSmith doesn't cover.
+
+| Concern | LangSmith | observability.py |
+|---------|-----------|-----------------|
+| LLM call tracing | Spans, inputs/outputs | Not covered |
+| Structured operational logging | Not covered | JSON logging with subsystem awareness |
+| Dual-destination (CloudWatch/local) | Not covered | Auto-detect AWS, fallback to local |
+| Session transcripts | Cloud-hosted traces | Local JSONL forensic record |
+| Cost tracking | Token counts in cloud | Per-model pricing with last-call semantics |
+| Config audit | Not covered | Before/after hashing, suspicious change detection |
+| Diagnostic events | Not covered | Pluggable event system |
+
+### Dual-Destination Logging
+
+- **In AWS** (Lambda, ECS, EC2): logs route to CloudWatch automatically
+- **Locally**: logs write to `.agent/logs/` as JSONL files
+
+### Available Audit Logs
+
+- `logs/*.jsonl` — Structured operational logs
+- `logs/prompts.jsonl` — System prompt snapshots per invocation
+- `logs/config_audit.jsonl` — Configuration change detection
+- `logs/events.jsonl` — Diagnostic events
+- `transcripts/*.jsonl` — Append-only session transcripts
+
+Configure observability in `config.yaml` under the `observability` section.
+"""
+
+    def _render_readme_observability_config_line(self) -> str:
+        """Render the observability config bullet for README, or empty string."""
+        if not self.config.observability.enabled:
+            return ""
+        return "\n- **observability.log_level** — Minimum log level for structured logging"
+
+    def _render_test_observability(self) -> str:
+        """Render observability tests for generated test_agent.py, or empty string."""
+        if not self.config.observability.enabled:
+            return ""
+        return """
+
+OBSERVABILITY_FILE = Path(__file__).parent.parent / "observability.py"
+
+
+class TestObservabilitySyntax:
+    \"\"\"Verify generated observability.py is syntactically valid Python.\"\"\"
+
+    def test_observability_file_exists(self):
+        assert OBSERVABILITY_FILE.exists(), f"observability.py not found at {OBSERVABILITY_FILE}"
+
+    def test_observability_parses(self):
+        \"\"\"Ensure observability.py is valid Python syntax.\"\"\"
+        source = OBSERVABILITY_FILE.read_text()
+        ast.parse(source)
+
+    def test_observability_has_key_classes(self):
+        \"\"\"Verify observability.py contains all required classes.\"\"\"
+        source = OBSERVABILITY_FILE.read_text()
+        tree = ast.parse(source)
+        class_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+        ]
+        for expected in [
+            "TokenUsage", "CostBreakdown", "ModelCostConfig",
+            "SessionTranscript", "PromptLog", "ConfigAuditLog",
+            "ObservabilityContext",
+        ]:
+            assert expected in class_names, f"{expected} class not found in observability.py"
+
+    def test_observability_has_key_functions(self):
+        \"\"\"Verify observability.py contains all required functions.\"\"\"
+        source = OBSERVABILITY_FILE.read_text()
+        tree = ast.parse(source)
+        func_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        ]
+        for expected in [
+            "setup_logging", "get_logger", "setup_observability",
+            "calculate_cost", "hash_content", "subscribe", "emit",
+        ]:
+            assert expected in func_names, f"{expected} function not found in observability.py"
 """
 
     def render_example_skill_md(self) -> str:
