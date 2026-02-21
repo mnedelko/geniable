@@ -5,7 +5,7 @@ evaluation tools from the AWS Evaluation Service.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from agent.api_clients.evaluation_client import EvaluationServiceClient
 from agent.models.mcp import MCPToolDefinition
@@ -23,8 +23,8 @@ class MCPClient:
     def __init__(
         self,
         evaluation_endpoint: str,
-        api_key: Optional[str] = None,
-        auth_token: Optional[str] = None,
+        api_key: str | None = None,
+        auth_token: str | None = None,
     ):
         """Initialize the MCP client.
 
@@ -38,10 +38,10 @@ class MCPClient:
             api_key=api_key,
             auth_token=auth_token,
         )
-        self._tools: Dict[str, MCPToolDefinition] = {}
+        self._tools: dict[str, MCPToolDefinition] = {}
         self._discovered = False
 
-    def discover(self, force: bool = False) -> List[MCPToolDefinition]:
+    def discover(self, force: bool = False) -> list[MCPToolDefinition]:
         """Discover available tools from the service.
 
         Args:
@@ -60,7 +60,7 @@ class MCPClient:
         logger.info(f"MCP discovery complete: {len(self._tools)} tools available")
         return tools
 
-    def get_tool(self, name: str) -> Optional[MCPToolDefinition]:
+    def get_tool(self, name: str) -> MCPToolDefinition | None:
         """Get a specific tool by name.
 
         Args:
@@ -73,7 +73,7 @@ class MCPClient:
             self.discover()
         return self._tools.get(name)
 
-    def list_tools(self) -> List[str]:
+    def list_tools(self) -> list[str]:
         """List all available tool names.
 
         Returns:
@@ -83,7 +83,7 @@ class MCPClient:
             self.discover()
         return list(self._tools.keys())
 
-    def validate_input(self, tool_name: str, input_data: Dict[str, Any]) -> bool:
+    def validate_input(self, tool_name: str, input_data: dict[str, Any]) -> bool:
         """Validate input data against tool schema.
 
         Args:
@@ -111,7 +111,7 @@ class MCPClient:
 
         return True
 
-    def get_required_fields(self, tool_name: str) -> List[str]:
+    def get_required_fields(self, tool_name: str) -> list[str]:
         """Get required input fields for a tool.
 
         Args:
@@ -123,9 +123,10 @@ class MCPClient:
         tool = self.get_tool(tool_name)
         if not tool:
             return []
-        return tool.input_schema.get("required", [])
+        required: list[str] = tool.input_schema.get("required", [])
+        return required
 
-    def get_tool_info(self, tool_name: str) -> Optional[Dict[str, Any]]:
+    def get_tool_info(self, tool_name: str) -> dict[str, Any] | None:
         """Get human-readable tool information.
 
         Args:

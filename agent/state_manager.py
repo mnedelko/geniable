@@ -5,10 +5,9 @@ duplicate processing and enable incremental analysis runs.
 """
 
 import json
-import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -23,12 +22,12 @@ class ProcessingHistoryEntry(BaseModel):
     issues_created: int = 0
     issues_synced_to_jira: bool = False
     issues_synced_to_notion: bool = False
-    jira_issue_ids: List[str] = Field(default_factory=list)
-    notion_issue_ids: List[str] = Field(default_factory=list)
-    jira_issue_urls: List[str] = Field(default_factory=list)
-    notion_issue_urls: List[str] = Field(default_factory=list)
-    documentation_path: Optional[str] = None
-    error_message: Optional[str] = None
+    jira_issue_ids: list[str] = Field(default_factory=list)
+    notion_issue_ids: list[str] = Field(default_factory=list)
+    jira_issue_urls: list[str] = Field(default_factory=list)
+    notion_issue_urls: list[str] = Field(default_factory=list)
+    documentation_path: str | None = None
+    error_message: str | None = None
 
 
 class SyncSummary(BaseModel):
@@ -36,8 +35,8 @@ class SyncSummary(BaseModel):
 
     last_sync: str
     total_issues_synced: int = 0
-    jira_project_key: Optional[str] = None
-    notion_database_id: Optional[str] = None
+    jira_project_key: str | None = None
+    notion_database_id: str | None = None
 
 
 class ProcessingState(BaseModel):
@@ -45,10 +44,10 @@ class ProcessingState(BaseModel):
 
     project: str
     last_poll: str
-    processed_thread_ids: List[str] = Field(default_factory=list)
-    processing_history: List[ProcessingHistoryEntry] = Field(default_factory=list)
-    sync_summary: Optional[SyncSummary] = None
-    pending_issues: List[Dict[str, Any]] = Field(default_factory=list)
+    processed_thread_ids: list[str] = Field(default_factory=list)
+    processing_history: list[ProcessingHistoryEntry] = Field(default_factory=list)
+    sync_summary: SyncSummary | None = None
+    pending_issues: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class StateManager:
@@ -57,7 +56,7 @@ class StateManager:
     State is stored in a JSON file in the reports directory.
     """
 
-    def __init__(self, project: str, state_dir: Optional[str] = None):
+    def __init__(self, project: str, state_dir: str | None = None):
         """Initialize state manager.
 
         Args:
@@ -67,7 +66,7 @@ class StateManager:
         self.project = project
         self.state_dir = Path(state_dir or "./reports")
         self.state_file = self.state_dir / "processing_state.json"
-        self._state: Optional[ProcessingState] = None
+        self._state: ProcessingState | None = None
 
     def _ensure_dir(self) -> None:
         """Ensure state directory exists."""
@@ -80,7 +79,7 @@ class StateManager:
 
         if self.state_file.exists():
             try:
-                with open(self.state_file, "r") as f:
+                with open(self.state_file) as f:
                     data = json.load(f)
                 self._state = ProcessingState(**data)
             except (json.JSONDecodeError, Exception) as e:
@@ -96,7 +95,7 @@ class StateManager:
         """Create a new empty state."""
         return ProcessingState(
             project=self.project,
-            last_poll=datetime.now(timezone.utc).isoformat(),
+            last_poll=datetime.now(UTC).isoformat(),
             processed_thread_ids=[],
             processing_history=[],
         )
@@ -123,7 +122,7 @@ class StateManager:
         state = self.load()
         return thread_id in state.processed_thread_ids
 
-    def get_unprocessed_threads(self, thread_ids: List[str]) -> List[str]:
+    def get_unprocessed_threads(self, thread_ids: list[str]) -> list[str]:
         """Filter out already-processed threads.
 
         Args:
@@ -141,12 +140,12 @@ class StateManager:
         name: str,
         status: str,
         issues_created: int = 0,
-        documentation_path: Optional[str] = None,
-        jira_issue_ids: Optional[List[str]] = None,
-        notion_issue_ids: Optional[List[str]] = None,
-        jira_issue_urls: Optional[List[str]] = None,
-        notion_issue_urls: Optional[List[str]] = None,
-        error_message: Optional[str] = None,
+        documentation_path: str | None = None,
+        jira_issue_ids: list[str] | None = None,
+        notion_issue_ids: list[str] | None = None,
+        jira_issue_urls: list[str] | None = None,
+        notion_issue_urls: list[str] | None = None,
+        error_message: str | None = None,
     ) -> None:
         """Record that a thread has been processed.
 
@@ -173,7 +172,7 @@ class StateManager:
             thread_id=thread_id,
             name=name,
             status=status,
-            processed_at=datetime.now(timezone.utc).isoformat(),
+            processed_at=datetime.now(UTC).isoformat(),
             issues_created=issues_created,
             issues_synced_to_jira=bool(jira_issue_ids),
             issues_synced_to_notion=bool(notion_issue_ids),
@@ -198,15 +197,15 @@ class StateManager:
             state.processing_history.append(entry)
 
         # Update last poll time
-        state.last_poll = datetime.now(timezone.utc).isoformat()
+        state.last_poll = datetime.now(UTC).isoformat()
 
         self.save()
 
     def update_sync_summary(
         self,
         total_issues_synced: int,
-        jira_project_key: Optional[str] = None,
-        notion_database_id: Optional[str] = None,
+        jira_project_key: str | None = None,
+        notion_database_id: str | None = None,
     ) -> None:
         """Update the sync summary.
 
@@ -218,7 +217,7 @@ class StateManager:
         state = self.load()
 
         state.sync_summary = SyncSummary(
-            last_sync=datetime.now(timezone.utc).isoformat(),
+            last_sync=datetime.now(UTC).isoformat(),
             total_issues_synced=total_issues_synced,
             jira_project_key=jira_project_key,
             notion_database_id=notion_database_id,
@@ -227,8 +226,8 @@ class StateManager:
         self.save()
 
     def get_processing_history(
-        self, thread_id: Optional[str] = None
-    ) -> List[ProcessingHistoryEntry]:
+        self, thread_id: str | None = None
+    ) -> list[ProcessingHistoryEntry]:
         """Get processing history.
 
         Args:
@@ -249,7 +248,7 @@ class StateManager:
         self._state = self._create_new_state()
         self.save()
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get processing statistics.
 
         Returns:

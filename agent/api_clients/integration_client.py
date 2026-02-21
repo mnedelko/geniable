@@ -1,7 +1,9 @@
 """Client for the AWS Integration Service."""
 
 import logging
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from datetime import UTC
+from typing import Any
 
 import requests
 
@@ -14,50 +16,50 @@ ProgressCallback = Callable[[str, int, int, str], None]
 class ThreadData:
     """Thread data from the Integration Service."""
 
-    def __init__(self, data: Dict[str, Any]):
+    def __init__(self, data: dict[str, Any]):
         self._data = data
 
     @property
     def thread_id(self) -> str:
-        return self._data.get("thread_id", "")
+        return str(self._data.get("thread_id", ""))
 
     @property
     def name(self) -> str:
-        return self._data.get("name", "")
+        return str(self._data.get("name", ""))
 
     @property
     def status(self) -> str:
-        return self._data.get("status", "unknown")
+        return str(self._data.get("status", "unknown"))
 
     @property
     def duration_seconds(self) -> float:
-        return self._data.get("duration_seconds", 0.0)
+        return float(self._data.get("duration_seconds", 0.0))
 
     @property
     def total_tokens(self) -> int:
-        return self._data.get("total_tokens", 0)
+        return int(self._data.get("total_tokens", 0))
 
     @property
     def user_query(self) -> str:
-        return self._data.get("user_query", "")
+        return str(self._data.get("user_query", ""))
 
     @property
-    def final_response(self) -> Optional[str]:
+    def final_response(self) -> str | None:
         return self._data.get("final_response")
 
     @property
-    def annotation_text(self) -> Optional[str]:
+    def annotation_text(self) -> str | None:
         return self._data.get("annotation_text")
 
     @property
-    def errors(self) -> List[str]:
-        return self._data.get("errors", [])
+    def errors(self) -> list[str]:
+        return list(self._data.get("errors", []))
 
     @property
-    def langsmith_url(self) -> Optional[str]:
+    def langsmith_url(self) -> str | None:
         return self._data.get("langsmith_url")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return self._data
 
 
@@ -66,7 +68,7 @@ class FetchResult:
 
     def __init__(
         self,
-        threads: List[ThreadData],
+        threads: list[ThreadData],
         total_in_queue: int,
         returned: int,
         skipped: int,
@@ -92,8 +94,8 @@ class IntegrationServiceClient:
     def __init__(
         self,
         endpoint: str,
-        api_key: Optional[str] = None,
-        auth_token: Optional[str] = None,
+        api_key: str | None = None,
+        auth_token: str | None = None,
         timeout: int = 30,
     ):
         """Initialize the client.
@@ -141,7 +143,7 @@ class IntegrationServiceClient:
         self,
         limit: int = 50,
         with_details: bool = True,
-        progress_callback: Optional[ProgressCallback] = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> FetchResult:
         """Fetch annotated threads from LangSmith with filtering metadata.
 
@@ -165,7 +167,7 @@ class IntegrationServiceClient:
             if progress_callback:
                 progress_callback("summaries", 0, 0, "")
 
-            params = {
+            params: dict[str, str | int] = {
                 "limit": limit,
                 "with_details": "false",  # Always get summaries first
                 "skip_processed": "true",  # AWS filters already-analyzed threads
@@ -204,7 +206,7 @@ class IntegrationServiceClient:
                 )
 
             # Step 2: If details requested, fetch each thread's details individually
-            threads: List[ThreadData] = []
+            threads: list[ThreadData] = []
             if with_details:
                 logger.info(f"Fetching details for {len(threads_data)} threads one-by-one")
                 if progress_callback:
@@ -246,8 +248,8 @@ class IntegrationServiceClient:
         self,
         limit: int = 50,
         with_details: bool = True,
-        progress_callback: Optional[ProgressCallback] = None,
-    ) -> List[ThreadData]:
+        progress_callback: ProgressCallback | None = None,
+    ) -> list[ThreadData]:
         """Fetch annotated threads from LangSmith.
 
         Uses a two-step approach to avoid timeouts:
@@ -268,9 +270,9 @@ class IntegrationServiceClient:
 
     def mark_threads_done(
         self,
-        thread_ids: List[str],
+        thread_ids: list[str],
         project: str = "default",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Mark threads as analyzed/done in AWS.
 
         Syncs the processing state to AWS so these threads won't be
@@ -285,9 +287,9 @@ class IntegrationServiceClient:
         """
         try:
             # Build thread state objects
-            from datetime import datetime, timezone
+            from datetime import datetime
 
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             threads = [
                 {
                     "thread_id": tid,
@@ -310,7 +312,7 @@ class IntegrationServiceClient:
             )
             response.raise_for_status()
 
-            result = response.json()
+            result: dict[str, Any] = response.json()
             logger.info(f"Marked {len(thread_ids)} threads as done: {result}")
             return result
 
@@ -321,8 +323,8 @@ class IntegrationServiceClient:
     def create_ticket(
         self,
         provider: str,
-        issue_data: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        issue_data: dict[str, Any],
+    ) -> dict[str, Any]:
         """Create a ticket in the target system.
 
         Args:
@@ -345,7 +347,8 @@ class IntegrationServiceClient:
             )
             response.raise_for_status()
 
-            return response.json()
+            result: dict[str, Any] = response.json()
+            return result
 
         except Exception as e:
             logger.error(f"Failed to create ticket: {e}")
@@ -360,7 +363,7 @@ class IntegrationServiceClient:
         try:
             response = self._session.get(
                 f"{self.endpoint}/threads/annotated",
-                params={"limit": 1, "with_details": "false"},
+                params={"limit": "1", "with_details": "false"},
                 timeout=10,
             )
             return response.status_code == 200

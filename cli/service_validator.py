@@ -2,7 +2,7 @@
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import requests
 
@@ -16,7 +16,7 @@ class ValidationResult:
     service: str
     success: bool
     message: str
-    details: Optional[Dict[str, Any]] = None
+    details: dict[str, Any] | None = None
 
 
 class ServiceValidator:
@@ -37,7 +37,7 @@ class ServiceValidator:
         self.timeout = timeout
 
     def validate_langsmith(
-        self, api_key: str, queue_name: Optional[str] = None
+        self, api_key: str, queue_name: str | None = None
     ) -> ValidationResult:
         """Validate LangSmith API key and optionally the annotation queue.
 
@@ -129,7 +129,7 @@ class ServiceValidator:
             )
 
     def validate_integration_endpoint(
-        self, endpoint: str, api_key: Optional[str] = None, auth_token: Optional[str] = None
+        self, endpoint: str, api_key: str | None = None, auth_token: str | None = None
     ) -> ValidationResult:
         """Validate Integration Service endpoint.
 
@@ -150,9 +150,10 @@ class ServiceValidator:
 
             # Try to fetch threads with limit=1 as a health check
             # Use longer timeout as this endpoint calls LangSmith API
+            params: dict[str, str | int] = {"limit": 1, "with_details": "false"}
             response = requests.get(
                 f"{endpoint.rstrip('/')}/threads/annotated",
-                params={"limit": 1, "with_details": "false"},
+                params=params,
                 headers=headers,
                 timeout=self.INTEGRATION_SERVICE_TIMEOUT,
             )
@@ -199,7 +200,7 @@ class ServiceValidator:
             )
 
     def validate_evaluation_endpoint(
-        self, endpoint: str, api_key: Optional[str] = None, auth_token: Optional[str] = None
+        self, endpoint: str, api_key: str | None = None, auth_token: str | None = None
     ) -> ValidationResult:
         """Validate Evaluation Service endpoint.
 
@@ -414,8 +415,8 @@ class ServiceValidator:
             )
 
     def validate_all(
-        self, config: Dict[str, Any], auth_token: Optional[str] = None
-    ) -> List[ValidationResult]:
+        self, config: dict[str, Any], auth_token: str | None = None
+    ) -> list[ValidationResult]:
         """Validate all services based on configuration.
 
         Args:
@@ -468,7 +469,7 @@ class ServiceValidator:
 
         return results
 
-    def format_results(self, results: List[ValidationResult]) -> Tuple[bool, str]:
+    def format_results(self, results: list[ValidationResult]) -> tuple[bool, str]:
         """Format validation results for display.
 
         Args:

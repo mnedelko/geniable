@@ -23,6 +23,37 @@ class StrandsTemplate(BaseTemplate):
             "strands-agents-tools>=0.1.0",
         ]
 
+    def render_identity_tools(self) -> str:
+        """Render Strands-specific TOOLS.md."""
+        return """\
+# Tool Guidance — Strands Agents
+
+## @tool Decorator
+- Use the `@tool` decorator to register functions as agent tools
+- The function docstring becomes the tool description for the model
+- Type hints on parameters are used to generate the tool schema
+
+## Tool Function Signatures
+- Tool functions should have clear, typed parameters
+- Return strings or serialisable objects — the agent formats the response
+- Use descriptive parameter names — the model sees them
+
+## Agent Tool List
+- Pass tools to `Agent(tools=[tool1, tool2])` during construction
+- Tools are available to the model in every conversation turn
+- Order does not matter — the model selects tools by description
+
+## Tool Result Handling
+- Strands automatically wraps tool returns as tool results
+- Errors raised in tools are caught and reported to the model
+- Use structured returns (dicts, dataclasses) for complex results
+
+## Limits
+- Maximum tool invocations per turn: 10
+- Timeout per tool call: 30 seconds
+- Always respect tool permission boundaries
+"""
+
     def render_section_1_imports(self) -> str:
         return f"""\
 # =============================================================================

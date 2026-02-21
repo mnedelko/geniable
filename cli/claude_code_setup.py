@@ -6,7 +6,6 @@ agent configuration, enabling the /agent workflow in Claude Code.
 
 import logging
 from pathlib import Path
-from typing import Optional, Tuple
 
 import questionary
 from rich.console import Console
@@ -20,7 +19,7 @@ logger = logging.getLogger(__name__)
 class ClaudeCodeSetup:
     """Handles Claude Code agent setup verification and guidance."""
 
-    def __init__(self, project_root: Optional[Path] = None):
+    def __init__(self, project_root: Path | None = None):
         """Initialize the setup handler.
 
         Args:
@@ -28,7 +27,7 @@ class ClaudeCodeSetup:
         """
         self.project_root = project_root or Path.cwd()
 
-    def check_claude_md_exists(self) -> Tuple[bool, Optional[Path]]:
+    def check_claude_md_exists(self) -> tuple[bool, Path | None]:
         """Check if CLAUDE.md exists in the project.
 
         Checks both root and .claude/ directory.
@@ -203,7 +202,7 @@ class ClaudeCodeSetup:
         return True
 
 
-def run_claude_code_setup(project_root: Optional[Path] = None) -> bool:
+def run_claude_code_setup(project_root: Path | None = None) -> bool:
     """Convenience function to run Claude Code setup check.
 
     Args:

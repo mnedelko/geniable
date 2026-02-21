@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import yaml
 
@@ -14,14 +14,14 @@ DEFAULT_CONFIG_PATH = Path.home() / ".geniable.yaml"
 class ConfigManager:
     """Manages application configuration from file and environment."""
 
-    def __init__(self, config_path: Path = None):
+    def __init__(self, config_path: Path | None = None):
         """Initialize the config manager.
 
         Args:
             config_path: Path to config file (uses default if not provided)
         """
         self.config_path = config_path or DEFAULT_CONFIG_PATH
-        self._config: Optional[AppConfig] = None
+        self._config: AppConfig | None = None
 
     def load(self) -> AppConfig:
         """Load configuration from file and environment.
@@ -52,7 +52,7 @@ class ConfigManager:
         self._config = AppConfig(**config_dict)
         return self._config
 
-    def _apply_env_overrides(self, config: Dict[str, Any]) -> Dict[str, Any]:
+    def _apply_env_overrides(self, config: dict[str, Any]) -> dict[str, Any]:
         """Apply environment variable overrides to config.
 
         Supports:
@@ -137,7 +137,7 @@ class ConfigManager:
             return False
 
     @staticmethod
-    def create_template(path: Path = None) -> Path:
+    def create_template(path: Path | None = None) -> Path:
         """Create a configuration template file.
 
         Args:
@@ -186,7 +186,7 @@ defaults:
         return path
 
     @staticmethod
-    def save_config(config: Dict[str, Any], path: Path = None) -> Path:
+    def save_config(config: dict[str, Any], path: Path | None = None) -> Path:
         """Save configuration dictionary to YAML file.
 
         Args:
@@ -210,7 +210,7 @@ defaults:
         return path
 
     @staticmethod
-    def _transform_to_yaml_format(wizard_config: Dict[str, Any]) -> Dict[str, Any]:
+    def _transform_to_yaml_format(wizard_config: dict[str, Any]) -> dict[str, Any]:
         """Transform wizard configuration to YAML structure.
 
         Args:
@@ -233,7 +233,7 @@ defaults:
         return config
 
     @staticmethod
-    def _generate_yaml_content(config: Dict[str, Any]) -> str:
+    def _generate_yaml_content(config: dict[str, Any]) -> str:
         """Generate YAML content with comments.
 
         Args:

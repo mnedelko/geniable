@@ -24,6 +24,37 @@ class LangGraphTemplate(BaseTemplate):
             "langchain-core>=0.3.0",
         ]
 
+    def render_identity_tools(self) -> str:
+        """Render LangGraph-specific TOOLS.md."""
+        return """\
+# Tool Guidance — LangGraph
+
+## StateGraph Tool Nodes
+- Define tools as graph nodes that receive and return `AgentState`
+- Use `add_node("tool_name", tool_function)` to register tool nodes
+- Connect tool nodes with `add_edge()` or `add_conditional_edges()`
+
+## LangChain Tool Binding
+- Bind tools to the LLM with `llm.bind_tools([tool1, tool2])`
+- Tools must have docstrings — LangChain uses them as tool descriptions
+- Use `@tool` decorator from `langchain_core.tools` for simple tools
+
+## State Management in Tools
+- Tool functions receive the full `AgentState` TypedDict
+- Return a dict with only the keys you want to update
+- Never mutate the input state directly — return new values
+
+## ToolMessage Response Format
+- When a tool call is made, respond with `ToolMessage(content=result)`
+- Include `tool_call_id` to match the response to the invocation
+- Return structured JSON when the result has multiple fields
+
+## Limits
+- Maximum tool invocations per turn: 10
+- Timeout per tool call: 30 seconds
+- Always respect tool permission boundaries
+"""
+
     def render_section_1_imports(self) -> str:
         return f"""\
 # =============================================================================

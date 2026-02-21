@@ -6,8 +6,6 @@ import os
 import shutil
 import subprocess
 import sys
-from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -161,7 +159,7 @@ Begin your analysis now."""
         return 1
 
 
-def _get_anthropic_api_key(config_manager: ConfigManager) -> Optional[str]:
+def _get_anthropic_api_key(config_manager: ConfigManager) -> str | None:
     """Get Anthropic API key from environment, config, or secrets.
 
     Priority order:
@@ -193,7 +191,7 @@ def _get_anthropic_api_key(config_manager: ConfigManager) -> Optional[str]:
             secrets_client = SecretsManagerClient()
             secret = secrets_client.get_secret("anthropic")
             if secret and secret.get("api_key"):
-                return secret["api_key"]
+                return str(secret["api_key"])
     except Exception:
         pass
 
@@ -232,7 +230,7 @@ def _prompt_for_anthropic_key(config_manager: ConfigManager) -> str:
             from shared.models.config import AnthropicConfig
 
             config.anthropic = AnthropicConfig(api_key=api_key)
-            config_manager.save(config)
+            ConfigManager.save_config(config.model_dump())
             print_success("API key saved to config")
         except Exception as e:
             print_warning(f"Could not save to config: {e}")
@@ -260,7 +258,7 @@ def _setup_ci_mode(config_manager: ConfigManager) -> str:
     return api_key
 
 
-def _require_auth():
+def _require_auth() -> None:
     """Require authentication before proceeding."""
     import typer as t
 
@@ -283,7 +281,7 @@ def _require_auth():
         raise t.Exit(1)
 
 
-def _get_auth_token() -> Optional[str]:
+def _get_auth_token() -> str | None:
     """Get the current Cognito auth token.
 
     Returns:
@@ -311,7 +309,7 @@ def analyze_latest(
         "--ci",
         help="CI/CD mode: Use Anthropic API directly (requires API key)",
     ),
-):
+) -> None:
     """Analyze latest annotated threads from LangSmith queue.
 
     Default mode: Spawns Claude Code CLI for interactive analysis.
@@ -364,7 +362,7 @@ def analyze_latest(
         )
 
         # Fetch threads with progress display
-        def progress_handler(phase: str, current: int, total: int, thread_id: str):
+        def progress_handler(phase: str, current: int, total: int, thread_id: str) -> None:
             if phase == "summaries":
                 loading_progress.start_summaries()
             elif phase == "details":
@@ -490,7 +488,7 @@ def analyze_specific(
         "--ci",
         help="Enable LLM-powered reports using Anthropic API (requires API key)",
     ),
-):
+) -> None:
     """Select and analyze a specific thread interactively.
 
     Displays a table of recent threads and prompts for selection.
@@ -547,7 +545,7 @@ def analyze_specific(
         )
 
         # Fetch recent threads with loading animation
-        def progress_handler(phase: str, current: int, total: int, thread_id: str):
+        def progress_handler(phase: str, current: int, total: int, thread_id: str) -> None:
             if phase == "summaries":
                 loading_progress.start_summaries()
             elif phase == "details":
@@ -690,7 +688,7 @@ def analyze_specific(
         ticket_url = None
         if result.has_issues:
             print_warning(f"Found {result.issues_count} issues")
-            if Confirm.ask("Create ticket?", default=True):
+            if Confirm.ask("Create ticket?", default=True) and result.issue_card is not None:
                 ticket_response = agent.create_ticket(result.issue_card)
                 if ticket_response:
                     ticket_url = ticket_response.get("issue_url")
@@ -703,12 +701,12 @@ def analyze_specific(
                         if provider == "jira":
                             reporter.update_report_with_tickets(
                                 report_path=report_path,
-                                jira_tickets=[{"key": ticket_key, "url": ticket_url}],
+                                jira_tickets=[{"key": str(ticket_key), "url": str(ticket_url)}],
                             )
                         else:
                             reporter.update_report_with_tickets(
                                 report_path=report_path,
-                                notion_tickets=[{"id": ticket_key, "url": ticket_url}],
+                                notion_tickets=[{"id": str(ticket_key), "url": str(ticket_url)}],
                             )
         else:
             print_success("No issues found")
@@ -748,12 +746,12 @@ def analyze_specific(
 @app.command("fetch")
 def fetch(
     limit: int = typer.Option(50, "--limit", "-l", help="Maximum threads to fetch from queue"),
-    thread_id: Optional[str] = typer.Option(
+    thread_id: str | None = typer.Option(
         None, "--thread-id", "-t", help="Fetch a specific thread by ID"
     ),
     output: str = typer.Option("json", "--output", "-o", help="Output format: json, yaml, or summary"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
-):
+) -> None:
     """Fetch unanalyzed threads from LangSmith annotation queue.
 
     The AWS service automatically filters out previously analyzed threads,
@@ -886,7 +884,7 @@ def mark_done(
         ..., "--thread-ids", "-t", help="Comma-separated list of thread IDs to mark as done"
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
-):
+) -> None:
     """Mark threads as analyzed/done so they won't appear in future fetches.
 
     This syncs the processing state to AWS. Once marked, these threads

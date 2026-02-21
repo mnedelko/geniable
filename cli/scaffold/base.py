@@ -175,6 +175,27 @@ class EvaluatorOutput(BaseModel):
                 '"billing_tiers": [18000, 36000, 72000, 86400]})'
             )
 
+        if self.config.identity.enabled:
+            load_prompt_fn = '''\
+
+def load_system_prompt(mode: str = "full") -> str:
+    """Load system prompt via brief-packet assembly (Principle 3).
+
+    Args:
+        mode: "full" for main agent, "minimal" for sub-agents, "none" for bare calls.
+    """
+    from brief_packet import assemble_brief_packet
+    return assemble_brief_packet(mode=mode)'''
+        else:
+            load_prompt_fn = '''\
+
+def load_system_prompt() -> str:
+    """Load system prompt from prompts directory."""
+    prompt_file = PROMPT_DIR / "system_prompt.md"
+    if prompt_file.exists():
+        return prompt_file.read_text()
+    raise FileNotFoundError(f"System prompt not found: {prompt_file}")'''
+
         return f"""\
 # =============================================================================
 # 2. CONFIGURATION
@@ -186,13 +207,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).parent
 PROMPT_DIR = BASE_DIR / "prompts"
 
-
-def load_system_prompt() -> str:
-    \"\"\"Load system prompt from prompts directory.\"\"\"
-    prompt_file = PROMPT_DIR / "system_prompt.md"
-    if prompt_file.exists():
-        return prompt_file.read_text()
-    raise FileNotFoundError(f"System prompt not found: {{prompt_file}}")
+{load_prompt_fn}
 
 
 @dataclass
@@ -821,7 +836,7 @@ operational:
   max_iterations: 10
   timeout_seconds: 120
   log_level: "INFO"
-"""
+{self._render_identity_config_yaml()}"""
 
     def render_pyproject_toml(self) -> str:
         deps = ['    "pydantic>=2.0.0"', '    "pyyaml>=6.0.0"']
@@ -1166,4 +1181,383 @@ class TestConfig:
         ]
         assert "Config" in class_names, "Config class not found in agent.py"
         assert "EvaluatorOutput" in class_names, "EvaluatorOutput class not found"
+"""
+
+    # ------------------------------------------------------------------
+    # Identity layer rendering (Principle 3)
+    # ------------------------------------------------------------------
+
+    def _render_identity_config_yaml(self) -> str:
+        """Render the identity section of config.yaml, or empty string."""
+        if not self.config.identity.enabled:
+            return ""
+        layers_str = ", ".join(f'"{layer}"' for layer in self.config.identity.layers)
+        focus_str = ", ".join(f'"{f}"' for f in self.config.identity.rules_focus)
+        return f"""
+identity:
+  enabled: true
+  layers: [{layers_str}]
+  personality_preset: "{self.config.identity.personality_preset}"
+  rules_focus: [{focus_str}]
+  max_chars_per_file: 20000
+  truncation:
+    head_ratio: 0.7
+    tail_ratio: 0.2
+"""
+
+    def render_brief_packet_py(self) -> str:
+        """Render the brief_packet.py module for dynamic system prompt assembly."""
+        return '''\
+"""Brief Packet — dynamic system prompt assembly (Principle 3).
+
+Assembles the system prompt from independent identity layer files,
+enabling modular updates without touching agent code.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+IDENTITY_DIR = Path(__file__).parent / "identity"
+
+LAYER_FILES: dict[str, str] = {
+    "rules": "RULES.md",
+    "personality": "PERSONALITY.md",
+    "identity": "IDENTITY.md",
+    "tools": "TOOLS.md",
+    "user": "USER.md",
+    "memory": "MEMORY.md",
+    "bootstrap": "BOOTSTRAP.md",
+    "duties": "DUTIES.md",
+}
+
+MINIMAL_LAYERS = ("rules", "tools")
+
+MAX_CHARS = 20_000
+
+
+def _truncate(text: str, max_chars: int = MAX_CHARS) -> str:
+    """Truncate text with 70/20 head/tail split, preserving context."""
+    if len(text) <= max_chars:
+        return text
+    head_size = int(max_chars * 0.7)
+    tail_size = int(max_chars * 0.2)
+    notice = "\\n\\n[... content truncated for context window ...]\\n\\n"
+    return text[:head_size] + notice + text[-tail_size:]
+
+
+def _read_layer(filename: str) -> str:
+    """Read a single identity layer file, applying truncation."""
+    path = IDENTITY_DIR / filename
+    if not path.exists():
+        return ""
+    text = path.read_text().strip()
+    return _truncate(text)
+
+
+def assemble_brief_packet(mode: str = "full") -> str:
+    """Assemble the system prompt from identity layer files.
+
+    Args:
+        mode: "full" loads all layers, "minimal" loads RULES + TOOLS only,
+              "none" returns empty string.
+
+    Returns:
+        Assembled system prompt string.
+    """
+    if mode == "none":
+        return ""
+
+    if mode == "minimal":
+        layers = MINIMAL_LAYERS
+    else:
+        layers = tuple(LAYER_FILES.keys())
+
+    sections: list[str] = []
+    for layer_name in layers:
+        filename = LAYER_FILES.get(layer_name)
+        if filename is None:
+            continue
+        content = _read_layer(filename)
+        if content:
+            sections.append(f"# {layer_name.upper()}\\n\\n{content}")
+
+    return "\\n\\n---\\n\\n".join(sections)
+'''
+
+    def render_identity_rules(self) -> str:
+        """Render RULES.md based on selected focus areas."""
+        sections = ["# Operational Rules\n"]
+
+        focus = self.config.identity.rules_focus
+
+        if "safety" in focus:
+            sections.append("""\
+## Safety Constraints
+
+- Never generate content that could cause harm to users or systems
+- Refuse requests that violate ethical guidelines — explain why
+- Validate all external inputs before processing
+- Sanitise outputs to prevent injection attacks
+""")
+
+        if "tool_governance" in focus:
+            sections.append("""\
+## Tool Governance
+
+- Only use tools that are explicitly permitted in the current session
+- Request user confirmation before executing destructive operations
+- Log every tool invocation with parameters and results
+- Respect rate limits and resource quotas for external services
+""")
+
+        if "data_privacy" in focus:
+            sections.append("""\
+## Data Privacy
+
+- Never log or store personally identifiable information (PII)
+- Redact sensitive data from responses and logs
+- Follow data minimisation principles — collect only what is needed
+- Respect data retention policies and deletion requests
+""")
+
+        if "output_quality" in focus:
+            sections.append("""\
+## Output Quality
+
+- Provide structured, evidence-based responses
+- Cite sources and data when making claims
+- Use clear formatting — headings, lists, code blocks as appropriate
+- Acknowledge uncertainty explicitly rather than guessing
+""")
+
+        if "error_handling" in focus:
+            sections.append("""\
+## Error Handling
+
+- Fail gracefully with informative error messages
+- Provide actionable recovery suggestions when errors occur
+- Log errors with full context for debugging
+- Never expose internal stack traces or system details to users
+""")
+
+        return "\n".join(sections)
+
+    def render_identity_personality(self) -> str:
+        """Render PERSONALITY.md based on selected preset."""
+        preset = self.config.identity.personality_preset
+
+        if preset == "professional":
+            return """\
+# Personality
+
+## Voice & Tone
+- Professional and precise
+- Business-appropriate language
+- Confident but not arrogant
+
+## Communication Style
+- Lead with the key insight or answer
+- Use structured formats for complex information
+- Be thorough but respect the user's time
+
+## Values
+- Accuracy over speed
+- Clarity over cleverness
+- Helpfulness over brevity
+"""
+
+        if preset == "friendly":
+            return """\
+# Personality
+
+## Voice & Tone
+- Warm and conversational
+- Approachable and encouraging
+- Uses natural language, avoids jargon when possible
+
+## Communication Style
+- Start with acknowledgement of the user's request
+- Explain concepts in accessible terms
+- Offer next steps and suggestions proactively
+
+## Values
+- User comfort and understanding
+- Patience with all skill levels
+- Building confidence through clear explanations
+"""
+
+        if preset == "technical":
+            return """\
+# Personality
+
+## Voice & Tone
+- Detailed and specification-oriented
+- Precise technical terminology
+- Matter-of-fact and exact
+
+## Communication Style
+- Include relevant technical details and references
+- Use code examples and specifications liberally
+- Provide rationale for technical decisions
+
+## Values
+- Technical correctness above all
+- Completeness of information
+- Reproducibility of instructions
+"""
+
+        if preset == "concise":
+            return """\
+# Personality
+
+## Voice & Tone
+- Minimal and direct
+- No filler words or pleasantries
+- Every word earns its place
+
+## Communication Style
+- Answer first, elaborate only if asked
+- Use bullet points over paragraphs
+- Code over prose when applicable
+
+## Values
+- Brevity is respect for the user's time
+- Signal over noise
+- Action over discussion
+"""
+
+        # custom — blank template
+        return """\
+# Personality
+
+## Voice & Tone
+- [Define your agent's voice here]
+
+## Communication Style
+- [Define how your agent communicates]
+
+## Values
+- [Define what your agent prioritises]
+"""
+
+    def render_identity_identity(self) -> str:
+        """Render IDENTITY.md using project name and description."""
+        return f"""\
+# Public Identity
+
+## Name
+{self.config.project_name}
+
+## Bio
+{self.config.description}
+
+## Tagline
+A production AI agent built with {self.framework_display_name}.
+
+## Version
+0.1.0
+"""
+
+    def render_identity_tools(self) -> str:
+        """Render TOOLS.md with generic tool guidance.
+
+        Framework-specific templates override this method.
+        """
+        return """\
+# Tool Guidance
+
+## General Principles
+- Use tools only when reasoning alone is insufficient
+- Prefer the most specific tool available for the task
+- Validate tool inputs before invocation
+- Handle tool errors gracefully — report and suggest alternatives
+
+## Tool Loop Pattern
+1. **Reason** — determine if a tool is needed and which one
+2. **Act** — invoke the tool with validated parameters
+3. **Observe** — inspect the result for errors or unexpected output
+4. **Repeat** — continue until the task is complete or a limit is reached
+
+## Limits
+- Maximum tool invocations per turn: 10
+- Timeout per tool call: 30 seconds
+- Always respect tool permission boundaries
+"""
+
+    def render_identity_user(self) -> str:
+        """Render USER.md placeholder."""
+        return """\
+# User Context
+
+## Preferences
+- [Learned preferences will be recorded here at runtime]
+
+## Communication Style
+- [Observed user communication preferences]
+
+## Timezone
+- [User timezone if known]
+
+## Notes
+- This file is updated during interactions to personalise responses
+"""
+
+    def render_identity_memory(self) -> str:
+        """Render MEMORY.md with structured template."""
+        return """\
+# Persistent Memory
+
+## Format
+Each entry follows: `YYYY-MM-DD — [topic] — [observation]`
+
+## Entries
+<!-- New entries are appended below this line -->
+"""
+
+    def render_identity_bootstrap(self) -> str:
+        """Render BOOTSTRAP.md with one-time setup checklist."""
+        return """\
+# Bootstrap — One-Time Setup
+
+## Checklist
+- [ ] Verify config.yaml settings match your environment
+- [ ] Test model connection: `python agent.py "hello"`
+- [ ] Review identity layer files and customise as needed
+- [ ] Set up environment variables (see .env.example)
+- [ ] Run smoke tests: `make test`
+
+## Post-Setup
+Once all checks pass, this file can be cleared or archived.
+The agent will skip loading BOOTSTRAP.md once it is empty.
+"""
+
+    def render_identity_duties(self) -> str:
+        """Render DUTIES.md placeholder with example periodic tasks."""
+        return """\
+# Scheduled Duties
+
+## Format
+```
+schedule: <cron expression or interval>
+task: <description>
+enabled: true|false
+```
+
+## Example Duties
+```
+schedule: "0 9 * * 1"
+task: "Generate weekly summary of unresolved issues"
+enabled: false
+```
+
+```
+schedule: "every 4 hours"
+task: "Check for stale conversations and prompt follow-up"
+enabled: false
+```
+
+## Notes
+- Duties are only active when `enabled: true`
+- This file is a template — modify schedules to match your needs
 """

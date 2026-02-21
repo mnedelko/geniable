@@ -1,17 +1,14 @@
 """Output formatting for CLI commands."""
 
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 from rich.console import Console
 from rich.live import Live
 from rich.panel import Panel
 from rich.progress import (
-    BarColumn,
     Progress,
     SpinnerColumn,
-    TaskProgressColumn,
     TextColumn,
-    TimeElapsedColumn,
 )
 from rich.spinner import Spinner
 from rich.table import Table
@@ -23,25 +20,27 @@ console = Console()
 class ThreadLoadingProgress:
     """Progress display for thread loading with two phases."""
 
-    def __init__(self):
-        self._live: Optional[Live] = None
+    def __init__(self) -> None:
+        self._live: Live | None = None
         self._phase = "summaries"
         self._total_threads = 0
         self._current_thread = 0
         self._current_thread_id = ""
 
-    def __enter__(self):
+    def __enter__(self) -> "ThreadLoadingProgress":
         self._live = Live(console=console, refresh_per_second=10)
         self._live.__enter__()
         self._update_display()
         return self
 
-    def __exit__(self, *args):
+    def __exit__(self, *args: Any) -> None:
         if self._live:
             self._live.__exit__(*args)
 
-    def _update_display(self):
+    def _update_display(self) -> None:
         """Update the live display based on current phase."""
+        if self._live is None:
+            return
         if self._phase == "summaries":
             spinner = Spinner("dots", text=" Fetching thread summaries...")
             self._live.update(spinner)
@@ -49,7 +48,7 @@ class ThreadLoadingProgress:
             # Create a progress display with bar
             progress_text = Text()
             progress_text.append("📥 ", style="blue")
-            progress_text.append(f"Loading thread details: ", style="white")
+            progress_text.append("Loading thread details: ", style="white")
             progress_text.append(f"{self._current_thread}/{self._total_threads}", style="cyan bold")
 
             # Add progress bar
@@ -70,7 +69,7 @@ class ThreadLoadingProgress:
 
             # Add current thread ID if available
             if self._current_thread_id:
-                progress_text.append(f"\n    Thread: ", style="dim")
+                progress_text.append("\n    Thread: ", style="dim")
                 progress_text.append(self._current_thread_id[:20] + "...", style="dim italic")
 
             self._live.update(progress_text)
@@ -80,25 +79,25 @@ class ThreadLoadingProgress:
             complete_text.append(f"Loaded {self._total_threads} threads", style="green")
             self._live.update(complete_text)
 
-    def start_summaries(self):
+    def start_summaries(self) -> None:
         """Start the summaries loading phase."""
         self._phase = "summaries"
         self._update_display()
 
-    def start_details(self, total: int):
+    def start_details(self, total: int) -> None:
         """Start the details loading phase."""
         self._phase = "details"
         self._total_threads = total
         self._current_thread = 0
         self._update_display()
 
-    def update_details(self, current: int, thread_id: str = ""):
+    def update_details(self, current: int, thread_id: str = "") -> None:
         """Update the details loading progress."""
         self._current_thread = current
         self._current_thread_id = thread_id
         self._update_display()
 
-    def complete(self):
+    def complete(self) -> None:
         """Mark loading as complete."""
         self._phase = "complete"
         self._update_display()
@@ -129,13 +128,13 @@ def print_header(title: str) -> None:
     console.print(Panel(title, style="bold blue"))
 
 
-def print_config(config: Dict[str, Any]) -> None:
+def print_config(config: dict[str, Any]) -> None:
     """Print configuration summary."""
     table = Table(title="Configuration")
     table.add_column("Setting", style="cyan")
     table.add_column("Value", style="green")
 
-    def add_dict(d: Dict[str, Any], prefix: str = "") -> None:
+    def add_dict(d: dict[str, Any], prefix: str = "") -> None:
         for key, value in d.items():
             if isinstance(value, dict):
                 add_dict(value, f"{prefix}{key}.")
@@ -151,7 +150,7 @@ def print_config(config: Dict[str, Any]) -> None:
     console.print(table)
 
 
-def print_tools(tools: List[str]) -> None:
+def print_tools(tools: list[str]) -> None:
     """Print discovered evaluation tools."""
     table = Table(title="Available Evaluation Tools")
     table.add_column("#", style="dim")
@@ -163,7 +162,7 @@ def print_tools(tools: List[str]) -> None:
     console.print(table)
 
 
-def print_threads(threads: List[Dict[str, Any]]) -> None:
+def print_threads(threads: list[dict[str, Any]]) -> None:
     """Print thread summary."""
     table = Table(title="Annotated Threads")
     table.add_column("Thread ID", style="dim", max_width=12)
@@ -187,7 +186,7 @@ def print_threads(threads: List[Dict[str, Any]]) -> None:
     console.print(table)
 
 
-def print_run_summary(summary: Dict[str, Any]) -> None:
+def print_run_summary(summary: dict[str, Any]) -> None:
     """Print analysis run summary."""
     console.print()
     print_header("Analysis Complete")

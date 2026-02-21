@@ -23,6 +23,37 @@ class PiTemplate(BaseTemplate):
             "litellm>=1.0.0",
         ]
 
+    def render_identity_tools(self) -> str:
+        """Render Pi-specific TOOLS.md."""
+        return """\
+# Tool Guidance — Pi Agent Framework
+
+## register_tool() Decorator
+- Use `@register_tool("name", "description")` to register tool functions
+- The name and description are passed to the model for tool selection
+- Tool functions are stored in `TOOL_REGISTRY` for runtime lookup
+
+## TOOL_REGISTRY Management
+- All registered tools are available via `TOOL_REGISTRY` dict
+- Access tools by name: `TOOL_REGISTRY["tool_name"]["function"]`
+- The registry is populated at import time via decorators
+
+## Declarative Tool Configuration
+- Tools are listed in `create_agent_config()` by registry key
+- The agent config controls which tools are active per session
+- Use config.yaml `tools.profile` to set access levels (minimal/coding/full)
+
+## Tool Invocation
+- Pi invokes tools through the provider abstraction layer
+- Tool results are returned to the model as structured responses
+- Errors are caught and formatted as error responses
+
+## Limits
+- Maximum tool invocations per turn: 10
+- Timeout per tool call: 30 seconds
+- Always respect tool permission boundaries
+"""
+
     def render_section_1_imports(self) -> str:
         return f"""\
 # =============================================================================

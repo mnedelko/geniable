@@ -14,6 +14,21 @@ if TYPE_CHECKING:
 
 
 @dataclass
+class IdentityLayerConfig:
+    """Configuration for Principle 3: Separation of Identity Concerns."""
+
+    enabled: bool = False
+    layers: list[str] = field(default_factory=lambda: [
+        "rules", "personality", "identity", "tools",
+        "user", "memory", "bootstrap", "duties",
+    ])
+    personality_preset: str = "professional"
+    rules_focus: list[str] = field(default_factory=lambda: [
+        "safety", "tool_governance", "output_quality",
+    ])
+
+
+@dataclass
 class ProviderModel:
     """A provider + model pair for primary or fallback."""
 
@@ -33,6 +48,7 @@ class ScaffoldConfig:
     primary_model: ProviderModel
     output_dir: str
     fallback_models: list[ProviderModel] = field(default_factory=list)
+    identity: IdentityLayerConfig = field(default_factory=IdentityLayerConfig)
 
     def validate(self) -> None:
         """Validate configuration values."""
@@ -124,6 +140,25 @@ class ScaffoldGenerator:
             "tests/__init__.py": "",
             "tests/test_agent.py": template.render_test_agent(),
         }
+
+        if self.config.identity.enabled:
+            (output_path / "identity").mkdir(exist_ok=True)
+            files["brief_packet.py"] = template.render_brief_packet_py()
+
+            layer_renderers = {
+                "rules": template.render_identity_rules,
+                "personality": template.render_identity_personality,
+                "identity": template.render_identity_identity,
+                "tools": template.render_identity_tools,
+                "user": template.render_identity_user,
+                "memory": template.render_identity_memory,
+                "bootstrap": template.render_identity_bootstrap,
+                "duties": template.render_identity_duties,
+            }
+            for layer in self.config.identity.layers:
+                filename = layer.upper() + ".md"
+                renderer = layer_renderers[layer]
+                files[f"identity/{filename}"] = renderer()
 
         for rel_path, content in files.items():
             file_path = output_path / rel_path

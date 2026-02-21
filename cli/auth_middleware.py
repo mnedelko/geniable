@@ -6,7 +6,8 @@ in CLI commands.
 
 import functools
 import logging
-from typing import Callable, Optional, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 import typer
 
@@ -33,7 +34,7 @@ def require_auth(func: F) -> F:
     """
 
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
             from cli.auth import get_auth_client
         except ImportError as e:
@@ -65,7 +66,7 @@ def require_auth(func: F) -> F:
     return wrapper  # type: ignore
 
 
-def get_access_token() -> Optional[str]:
+def get_access_token() -> str | None:
     """Get the current user's access token.
 
     Returns:
@@ -86,7 +87,7 @@ def get_access_token() -> Optional[str]:
         return None
 
 
-def get_id_token() -> Optional[str]:
+def get_id_token() -> str | None:
     """Get the current user's ID token (for API Gateway authorization).
 
     Returns:
@@ -107,7 +108,7 @@ def get_id_token() -> Optional[str]:
         return None
 
 
-def get_user_id() -> Optional[str]:
+def get_user_id() -> str | None:
     """Get the current user's ID (Cognito sub claim).
 
     Returns:
@@ -159,12 +160,12 @@ class AuthenticatedCommand:
             require_login: If True, raises Exit if not authenticated
         """
         self.require_login = require_login
-        self.access_token: Optional[str] = None
-        self.id_token: Optional[str] = None
-        self.user_id: Optional[str] = None
-        self._tokens = None
+        self.access_token: str | None = None
+        self.id_token: str | None = None
+        self.user_id: str | None = None
+        self._tokens: Any = None
 
-    def __enter__(self):
+    def __enter__(self) -> "AuthenticatedCommand":
         try:
             from cli.auth import get_auth_client
 
@@ -194,8 +195,8 @@ class AuthenticatedCommand:
 
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        return False
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        return None
 
     @property
     def headers(self) -> dict:

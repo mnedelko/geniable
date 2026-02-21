@@ -5,7 +5,7 @@ evaluators and aggregating results.
 """
 
 import logging
-from typing import Any, Dict, List
+from typing import Any
 
 from agent.api_clients.evaluation_client import EvaluationServiceClient
 from agent.mcp_client import MCPClient
@@ -26,8 +26,8 @@ class EvaluationOrchestrator:
     def __init__(
         self,
         evaluation_endpoint: str,
-        api_key: str = None,
-        auth_token: str = None,
+        api_key: str | None = None,
+        auth_token: str | None = None,
     ):
         """Initialize the orchestrator.
 
@@ -43,7 +43,7 @@ class EvaluationOrchestrator:
         )
         self._mcp = MCPClient(evaluation_endpoint, api_key, auth_token=auth_token)
 
-    def evaluate_thread(self, thread_data: Dict[str, Any]) -> EvaluationResponse:
+    def evaluate_thread(self, thread_data: dict[str, Any]) -> EvaluationResponse:
         """Run all applicable evaluations on a thread.
 
         Args:
@@ -78,7 +78,7 @@ class EvaluationOrchestrator:
         logger.info(f"Executing {len(evaluations)} evaluations for thread {thread_id}")
         return self._client.execute_batch(thread_id, evaluations)
 
-    def _build_input(self, tool_name: str, thread_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _build_input(self, tool_name: str, thread_data: dict[str, Any]) -> dict[str, Any] | None:
         """Build input for a specific tool.
 
         Args:
@@ -89,7 +89,7 @@ class EvaluationOrchestrator:
             Input dictionary or None if data is insufficient
         """
         # Tool-specific input mappings
-        mappings = {
+        mappings: dict[str, dict[str, Any]] = {
             "latency_evaluation": {
                 "duration_seconds": thread_data.get("duration_seconds"),
             },
@@ -121,7 +121,7 @@ class EvaluationOrchestrator:
 
         return input_data
 
-    def get_failing_evaluations(self, response: EvaluationResponse) -> List[EvaluationResult]:
+    def get_failing_evaluations(self, response: EvaluationResponse) -> list[EvaluationResult]:
         """Get evaluations that failed or had warnings.
 
         Args:

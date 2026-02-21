@@ -2,7 +2,7 @@
 
 import shutil
 from pathlib import Path
-from typing import Optional, Set
+from typing import Any
 
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -42,7 +42,7 @@ def get_agent_source_dir() -> Path:
     )
 
 
-def get_shared_source_dir() -> Optional[Path]:
+def get_shared_source_dir() -> Path | None:
     """Get the source directory for shared code.
 
     Returns:
@@ -58,7 +58,7 @@ def get_shared_source_dir() -> Optional[Path]:
     return None
 
 
-def _ignore_patterns(directory: str, files: list) -> Set[str]:
+def _ignore_patterns(directory: str, files: list) -> set[str]:
     """Return files to ignore during copy.
 
     Args:
@@ -108,7 +108,7 @@ def inject_agent_code(
         FileExistsError: If target exists and overwrite is False
         FileNotFoundError: If source directory not found
     """
-    results = {
+    results: dict[str, Any] = {
         "agent_dir": None,
         "shared_dir": None,
         "files_copied": 0,
@@ -170,6 +170,7 @@ def inject_agent_code(
             progress.update(task, description="Copying shared module...")
 
             try:
+                assert shared_target is not None
                 if shared_target.exists():
                     shutil.rmtree(shared_target)
 

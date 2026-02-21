@@ -6,7 +6,7 @@ as specified in the architecture document.
 """
 
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -14,11 +14,11 @@ from pydantic import BaseModel, Field
 class AffectedCode(BaseModel):
     """Reference to affected code location with improvement suggestions."""
 
-    file: Optional[str] = Field(default=None, description="File path")
-    lines: Optional[str] = Field(default=None, description="Line range (e.g., '145-180')")
-    component: Optional[str] = Field(default=None, description="Component or class name")
-    function: Optional[str] = Field(default=None, description="Function or method name")
-    suggestion: Optional[str] = Field(
+    file: str | None = Field(default=None, description="File path")
+    lines: str | None = Field(default=None, description="Line range (e.g., '145-180')")
+    component: str | None = Field(default=None, description="Component or class name")
+    function: str | None = Field(default=None, description="Function or method name")
+    suggestion: str | None = Field(
         default=None, description="Improvement suggestion for this code"
     )
 
@@ -28,8 +28,8 @@ class Sources(BaseModel):
 
     thread_id: str = Field(..., description="LangSmith thread UUID")
     thread_name: str = Field(..., description="Human-readable thread name")
-    run_id: Optional[str] = Field(default=None, description="LangSmith run UUID")
-    langsmith_url: Optional[str] = Field(
+    run_id: str | None = Field(default=None, description="LangSmith run UUID")
+    langsmith_url: str | None = Field(
         default=None, description="Direct link to LangSmith thread"
     )
 
@@ -42,7 +42,7 @@ class EvaluationResult(BaseModel):
         ..., description="Evaluation outcome"
     )
     score: float = Field(..., ge=0, le=1, description="Normalized score (0-1)")
-    message: Optional[str] = Field(default=None, description="Detailed result message")
+    message: str | None = Field(default=None, description="Detailed result message")
 
 
 class IssueCard(BaseModel):
@@ -85,17 +85,17 @@ class IssueCard(BaseModel):
     details: str = Field(..., description="Detailed issue description with context")
     description: str = Field(..., description="Brief summary of the issue")
     recommendation: str = Field(..., description="Suggested fixes or improvement actions")
-    affected_code: Optional[AffectedCode] = Field(
+    affected_code: AffectedCode | None = Field(
         default=None, description="Code location and improvement suggestions"
     )
     sources: Sources = Field(..., description="Thread and run references")
 
     # Additional metadata
-    evaluation_results: List[EvaluationResult] = Field(
+    evaluation_results: list[EvaluationResult] = Field(
         default_factory=list, description="Results from evaluation tools"
     )
     created_at: datetime = Field(default_factory=datetime.utcnow, description="Creation timestamp")
-    issue_id: Optional[str] = Field(default=None, description="Generated issue ID (e.g., IA-001)")
+    issue_id: str | None = Field(default=None, description="Generated issue ID (e.g., IA-001)")
 
     class Config:
         """Pydantic model configuration."""

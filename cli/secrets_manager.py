@@ -7,7 +7,7 @@ cloud services (Integration Service, Evaluation Service).
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ class SecretSyncResult:
     secret_name: str
     success: bool
     message: str
-    version_id: Optional[str] = None
+    version_id: str | None = None
 
 
 class SecretsManagerClient:
@@ -58,8 +58,8 @@ class SecretsManagerClient:
     def __init__(
         self,
         region: str = "us-east-1",
-        secret_prefix: Optional[str] = None,
-        kms_key_id: Optional[str] = None,
+        secret_prefix: str | None = None,
+        kms_key_id: str | None = None,
     ):
         """Initialize the Secrets Manager client.
 
@@ -73,7 +73,7 @@ class SecretsManagerClient:
         self.kms_key_id = kms_key_id
         self._client = None
 
-    def _get_client(self):
+    def _get_client(self) -> Any:
         """Get or create boto3 Secrets Manager client."""
         if self._client is None:
             try:
@@ -103,8 +103,8 @@ class SecretsManagerClient:
     def sync_secret(
         self,
         category: str,
-        credentials: Dict[str, Any],
-        description: Optional[str] = None,
+        credentials: dict[str, Any],
+        description: str | None = None,
     ) -> SecretSyncResult:
         """Sync a single secret category to Secrets Manager.
 
@@ -174,7 +174,7 @@ class SecretsManagerClient:
                 message=str(e),
             )
 
-    def sync_all(self, config: Dict[str, Any]) -> List[SecretSyncResult]:
+    def sync_all(self, config: dict[str, Any]) -> list[SecretSyncResult]:
         """Sync all credentials from config to Secrets Manager.
 
         Args:
@@ -210,7 +210,7 @@ class SecretsManagerClient:
 
         return results
 
-    def get_secret(self, category: str) -> Optional[Dict[str, Any]]:
+    def get_secret(self, category: str) -> dict[str, Any] | None:
         """Retrieve a secret from Secrets Manager.
 
         Args:
@@ -224,7 +224,8 @@ class SecretsManagerClient:
         try:
             client = self._get_client()
             response = client.get_secret_value(SecretId=secret_name)
-            return json.loads(response["SecretString"])
+            result: dict[str, Any] = json.loads(response["SecretString"])
+            return result
 
         except client.exceptions.ResourceNotFoundException:
             logger.debug(f"Secret {secret_name} not found")
@@ -253,7 +254,7 @@ class SecretsManagerClient:
         try:
             client = self._get_client()
 
-            delete_kwargs = {"SecretId": secret_name}
+            delete_kwargs: dict[str, Any] = {"SecretId": secret_name}
             if force:
                 delete_kwargs["ForceDeleteWithoutRecovery"] = True
             else:
@@ -282,7 +283,7 @@ class SecretsManagerClient:
                 message=str(e),
             )
 
-    def list_secrets(self) -> List[Dict[str, Any]]:
+    def list_secrets(self) -> list[dict[str, Any]]:
         """List all secrets with the configured prefix.
 
         Returns:
@@ -331,7 +332,7 @@ class SecretsManagerClient:
             return False
 
 
-def format_sync_results(results: List[SecretSyncResult]) -> str:
+def format_sync_results(results: list[SecretSyncResult]) -> str:
     """Format sync results for display.
 
     Args:

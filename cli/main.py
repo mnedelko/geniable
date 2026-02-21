@@ -1,10 +1,8 @@
 """Main CLI application using Typer."""
 
 import logging
-import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Optional
 
 import typer
 
@@ -25,7 +23,7 @@ from cli.output_formatter import (
 
 
 # Auth middleware - authentication is required for all commands
-def require_auth():
+def require_auth() -> None:
     """Require authentication before proceeding.
 
     Checks if user is authenticated and exits with error if not.
@@ -49,7 +47,7 @@ def require_auth():
         raise typer.Exit(1)
 
 
-def _get_auth_token() -> Optional[str]:
+def _get_auth_token() -> str | None:
     """Get the current Cognito auth token.
 
     Returns:
@@ -96,7 +94,7 @@ def init(
     skip_validation: bool = typer.Option(
         False, "--skip-validation", help="Skip service validation"
     ),
-):
+) -> None:
     """Initialize configuration with interactive wizard.
 
     This command will:
@@ -187,7 +185,7 @@ def inject(
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing files"),
     no_shared: bool = typer.Option(False, "--no-shared", help="Skip shared module"),
-):
+) -> None:
     """Inject agent code for Claude Code visibility.
 
     Copies the agent module to a local directory so Claude Code
@@ -253,7 +251,7 @@ def configure(
     list_secrets: bool = typer.Option(
         False, "--list-secrets", help="List secrets in AWS Secrets Manager"
     ),
-):
+) -> None:
     """Configure the analyzer with credentials and settings."""
     # Require authentication
     require_auth()
@@ -425,10 +423,10 @@ def configure(
                     "database_id": config.notion.database_id,
                 }
 
-            results = validator.validate_all(config_dict)
+            validation_results = validator.validate_all(config_dict)
 
             all_passed = True
-            for result in results:
+            for result in validation_results:
                 status = "[green]✓[/green]" if result.success else "[red]✗[/red]"
                 console.print(f"  {status} {result.service}: {result.message}")
                 if not result.success:
@@ -462,15 +460,15 @@ def run(
     limit: int = typer.Option(50, "--limit", "-l", help="Maximum threads to analyze"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Analyze without creating tickets"),
     report_only: bool = typer.Option(False, "--report-only", help="Generate report only"),
-    queue: Optional[str] = typer.Option(None, "--queue", "-q", help="Override annotation queue"),
-    provider: Optional[str] = typer.Option(
+    queue: str | None = typer.Option(None, "--queue", "-q", help="Override annotation queue"),
+    provider: str | None = typer.Option(
         None, "--provider", "-p", help="Override provider (jira/notion)"
     ),
     force_reprocess: bool = typer.Option(
         False, "--force", "-f", help="Reprocess already-processed threads"
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
-):
+) -> None:
     """Run the analysis pipeline on annotated threads."""
     # Check auth status (optional for now)
     require_auth()
@@ -578,7 +576,7 @@ def run(
 @app.command()
 def status(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed status"),
-):
+) -> None:
     """Show current processing status and statistics."""
     # Check auth status (optional for now)
     require_auth()
@@ -639,7 +637,7 @@ def status(
 
 
 @app.command()
-def discover():
+def discover() -> None:
     """Discover available evaluation tools from the Evaluation Service."""
     # Check auth status (optional for now)
     require_auth()
@@ -677,7 +675,7 @@ def discover():
 
 
 @app.command()
-def stats():
+def stats() -> None:
     """Show processing statistics and history."""
     # Check auth status (optional for now)
     require_auth()
@@ -728,7 +726,7 @@ def stats():
 @app.command()
 def clear_state(
     confirm: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
-):
+) -> None:
     """Clear processing state (allows reprocessing all threads)."""
     # Check auth status (optional for now)
     require_auth()
@@ -761,7 +759,7 @@ def clear_state(
 
 
 @app.command()
-def version():
+def version() -> None:
     """Show version information."""
     from importlib.metadata import version as get_version
 
@@ -781,11 +779,11 @@ def version():
 
 @app.command()
 def login(
-    email: Optional[str] = typer.Option(None, "--email", "-e", help="Email address"),
+    email: str | None = typer.Option(None, "--email", "-e", help="Email address"),
     no_keyring: bool = typer.Option(
         False, "--no-keyring", help="Use file storage instead of system keyring"
     ),
-):
+) -> None:
     """Login to Geni cloud service.
 
     Authenticates with AWS Cognito and stores tokens securely in the
@@ -865,7 +863,7 @@ def login(
                 email=email,
             )
 
-            print_success(f"Password changed successfully!")
+            print_success("Password changed successfully!")
             print_success(f"Logged in as {email}")
 
             # Show next steps
@@ -886,7 +884,7 @@ def login(
 
 
 @app.command()
-def logout():
+def logout() -> None:
     """Logout and clear stored authentication tokens.
 
     Removes tokens from the system keyring or encrypted file storage.
@@ -913,7 +911,7 @@ def logout():
 
 
 @app.command()
-def whoami():
+def whoami() -> None:
     """Show current authentication status and user information.
 
     Displays the currently logged-in user, token expiry, and
@@ -966,7 +964,7 @@ def whoami():
 
         # Show token expiry
         if tokens.expires_at:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             if tokens.expires_at > now:
                 remaining = tokens.expires_at - now
                 hours, remainder = divmod(int(remaining.total_seconds()), 3600)
@@ -997,7 +995,7 @@ def analyze_latest_alias(
         "--ci",
         help="Enable LLM-powered reports using Anthropic API (for CI/CD pipelines)",
     ),
-):
+) -> None:
     """Analyze latest annotated threads (alias for 'analyze latest')."""
     from cli.commands.analyze import analyze_latest
 
@@ -1013,14 +1011,14 @@ def analyze_specific_alias(
         "--ci",
         help="Enable LLM-powered reports using Anthropic API (for CI/CD pipelines)",
     ),
-):
+) -> None:
     """Select and analyze a specific thread (alias for 'analyze specific')."""
     from cli.commands.analyze import analyze_specific
 
     analyze_specific(count=count, verbose=verbose, ci=ci)
 
 
-def main():
+def main() -> None:
     """Main entry point."""
     app()
 
