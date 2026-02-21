@@ -34,20 +34,65 @@ REGION_CHOICES = [
     "eu-west-1",
 ]
 
-MODEL_CHOICES = [
+# Provider choices for primary and fallback model selection
+PROVIDER_CHOICES = [
     questionary.Choice(
-        title="Claude Sonnet 4  (anthropic.claude-sonnet-4-20250514-v1:0)",
-        value="anthropic.claude-sonnet-4-20250514-v1:0",
+        title="AWS Bedrock  — Claude models via AWS",
+        value="bedrock",
     ),
     questionary.Choice(
-        title="Claude Haiku 4.5 (anthropic.claude-haiku-4-5-20251001-v1:0)",
-        value="anthropic.claude-haiku-4-5-20251001-v1:0",
+        title="OpenAI       — GPT-4o and o3 models",
+        value="openai",
     ),
     questionary.Choice(
-        title="Claude Opus 4    (anthropic.claude-opus-4-20250514-v1:0)",
-        value="anthropic.claude-opus-4-20250514-v1:0",
+        title="Google AI    — Gemini models",
+        value="google",
+    ),
+    questionary.Choice(
+        title="Ollama       — Local open-source models",
+        value="ollama",
     ),
 ]
+
+# Models available per provider
+MODELS_BY_PROVIDER = {
+    "bedrock": [
+        questionary.Choice(
+            title="Claude Sonnet 4  (anthropic.claude-sonnet-4-20250514-v1:0)",
+            value="anthropic.claude-sonnet-4-20250514-v1:0",
+        ),
+        questionary.Choice(
+            title="Claude Haiku 4.5 (anthropic.claude-haiku-4-5-20251001-v1:0)",
+            value="anthropic.claude-haiku-4-5-20251001-v1:0",
+        ),
+        questionary.Choice(
+            title="Claude Opus 4    (anthropic.claude-opus-4-20250514-v1:0)",
+            value="anthropic.claude-opus-4-20250514-v1:0",
+        ),
+    ],
+    "openai": [
+        questionary.Choice(title="GPT-4o", value="gpt-4o"),
+        questionary.Choice(title="GPT-4o mini", value="gpt-4o-mini"),
+        questionary.Choice(title="o3-mini", value="o3-mini"),
+    ],
+    "google": [
+        questionary.Choice(title="Gemini 2.0 Flash", value="gemini-2.0-flash"),
+        questionary.Choice(
+            title="Gemini 2.5 Pro", value="gemini-2.5-pro-preview-05-06"
+        ),
+    ],
+    "ollama": [
+        questionary.Choice(title="Llama 3.2", value="llama3.2"),
+        questionary.Choice(title="Mistral", value="mistral"),
+        questionary.Choice(title="DeepSeek R1", value="deepseek-r1"),
+    ],
+}
+
+# Providers that require an API key
+API_KEY_PROVIDERS = {
+    "openai": "OPENAI_API_KEY",
+    "google": "GOOGLE_API_KEY",
+}
 
 
 def _require_auth() -> None:
@@ -78,6 +123,42 @@ def _validate_project_name(name: str) -> bool | str:
     if not re.match(r"^[a-z][a-z0-9_-]*$", name):
         return "Must start with lowercase letter, contain only [a-z0-9_-]"
     return True
+
+
+def _ask_provider_model(prompt_prefix: str = "Primary") -> tuple[str, str, str] | None:
+    """Ask user to select a provider, model, and optional API key.
+
+    Returns:
+        Tuple of (provider, model_id, api_key) or None if user aborted.
+    """
+    provider = questionary.select(
+        f"{prompt_prefix} provider:",
+        choices=PROVIDER_CHOICES,
+    ).ask()
+
+    if provider is None:
+        return None
+
+    model_id = questionary.select(
+        f"{prompt_prefix} model:",
+        choices=MODELS_BY_PROVIDER[provider],
+    ).ask()
+
+    if model_id is None:
+        return None
+
+    api_key = ""
+    if provider in API_KEY_PROVIDERS:
+        env_var = API_KEY_PROVIDERS[provider]
+        api_key = questionary.text(
+            f"API key (or leave blank to use ${env_var} env var):",
+            default="",
+        ).ask()
+
+        if api_key is None:
+            return None
+
+    return provider, model_id, api_key
 
 
 @app.command("create")
@@ -120,7 +201,7 @@ def create() -> None:
     if description is None:
         raise typer.Abort()
 
-    # 4. AWS region
+    # 4. AWS region (still needed for Bedrock even if not primary)
     region = questionary.select(
         "AWS region:",
         choices=REGION_CHOICES,
@@ -130,16 +211,48 @@ def create() -> None:
     if region is None:
         raise typer.Abort()
 
-    # 5. Model
-    model_id = questionary.select(
-        "Default model:",
-        choices=MODEL_CHOICES,
-    ).ask()
+    # 5. Primary provider + model + API key
+    console.print("\n[cyan]Model Configuration (Principle 5: Model Resilience)[/cyan]")
+    primary_result = _ask_provider_model("Primary")
 
-    if model_id is None:
+    if primary_result is None:
         raise typer.Abort()
 
-    # 6. Output directory
+    from cli.scaffold import ProviderModel
+
+    primary_model = ProviderModel(
+        provider=primary_result[0],
+        model_id=primary_result[1],
+        api_key=primary_result[2],
+    )
+
+    # 6. Fallback models loop
+    fallback_models: list[ProviderModel] = []
+    while True:
+        add_fallback = questionary.confirm(
+            "Add a fallback model?",
+            default=False,
+        ).ask()
+
+        if add_fallback is None:
+            raise typer.Abort()
+
+        if not add_fallback:
+            break
+
+        fallback_result = _ask_provider_model("Fallback")
+        if fallback_result is None:
+            raise typer.Abort()
+
+        fallback_models.append(
+            ProviderModel(
+                provider=fallback_result[0],
+                model_id=fallback_result[1],
+                api_key=fallback_result[2],
+            )
+        )
+
+    # 7. Output directory
     output_dir = questionary.text(
         "Output directory:",
         default=f"./{project_name}",
@@ -156,7 +269,8 @@ def create() -> None:
         description=description,
         framework=framework,
         region=region,
-        model_id=model_id,
+        primary_model=primary_model,
+        fallback_models=fallback_models,
         output_dir=output_dir,
     )
 
@@ -180,7 +294,7 @@ def create() -> None:
         console.print("  python -m venv venv && source venv/bin/activate")
         console.print('  pip install -e ".[dev]"')
         console.print("  cp .env.example .env")
-        console.print("  # Edit .env with your AWS credentials")
+        console.print("  # Edit .env with your credentials")
         console.print("  make run")
 
     except FileExistsError as e:
