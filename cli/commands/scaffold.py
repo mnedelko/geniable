@@ -13,6 +13,7 @@ from cli.scaffold import (
     ObservabilityConfig,
     SessionConfig,
     ToolGovernanceConfig,
+    ToolsConfig,
 )
 
 console = Console()
@@ -446,6 +447,26 @@ def _ask_observability() -> ObservabilityConfig:
     return ObservabilityConfig(enabled=True)
 
 
+def _ask_tools() -> ToolsConfig:
+    """Ask user about tool availability (Principle 9: Tool Governance).
+
+    Returns:
+        ToolsConfig with user selections.
+    """
+    enable = questionary.confirm(
+        "Will your agent use tools? (generates tools/ folder with boilerplate)",
+        default=True,
+    ).ask()
+
+    if enable is None:
+        raise typer.Abort()
+
+    if not enable:
+        return ToolsConfig(enabled=False)
+
+    return ToolsConfig(enabled=True)
+
+
 @app.command("create")
 def create() -> None:
     """Create a new agent project from a template.
@@ -545,7 +566,11 @@ def create() -> None:
     console.print("\n[cyan]Tool Governance (Principle 9: Layered Permissions)[/cyan]")
     tool_governance_config = _ask_tool_governance()
 
-    # 9. Output directory
+    # 9. Tools (Principle 9: Tool Governance — executable tools)
+    console.print("\n[cyan]Tools (Principle 9: Executable Tool Functions)[/cyan]")
+    tools_config = _ask_tools()
+
+    # 10. Output directory
     output_dir = questionary.text(
         "Output directory:",
         default=f"./{project_name}",
@@ -554,15 +579,15 @@ def create() -> None:
     if output_dir is None:
         raise typer.Abort()
 
-    # 10. LangSmith tracing (Principle 16)
+    # 11. LangSmith tracing (Principle 16)
     console.print("\n[cyan]Observability (Principle 16: LangSmith Tracing)[/cyan]")
     langsmith_config = _ask_langsmith(project_name)
 
-    # 11. Session persistence (Principle 11)
+    # 12. Session persistence (Principle 11)
     console.print("\n[cyan]Session Persistence (Principle 11: Conversation State)[/cyan]")
     session_config = _ask_session_persistence()
 
-    # 12. Operational observability (Principle 17)
+    # 13. Operational observability (Principle 17)
     console.print(
         "\n[cyan]Operational Observability (Principle 17: Logging, Audit, Cost Tracking)[/cyan]"
     )
@@ -583,6 +608,7 @@ def create() -> None:
         tool_governance=tool_governance_config,
         langsmith=langsmith_config,
         sessions=session_config,
+        tools=tools_config,
         observability=observability_config,
     )
 

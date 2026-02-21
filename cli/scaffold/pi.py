@@ -346,6 +346,24 @@ class AgentState:
 """
 
     def render_section_5_worker(self) -> str:
+        if self.config.tools.enabled:
+            return f"""\
+# =============================================================================
+# 5. TOOL FUNCTIONS
+# =============================================================================
+{_principle_comments(5)}
+from tools import get_permitted_tools
+
+# Pi registers tools declaratively. Tools are discovered from the tools/
+# directory, filtered through tool_policy, and populated into the registry.
+
+TOOL_REGISTRY: dict[str, Any] = {{}}
+
+# Populate registry from discovered tools
+for _tool_def in get_permitted_tools():
+    TOOL_REGISTRY[_tool_def["name"]] = _tool_def
+"""
+
         return f"""\
 # =============================================================================
 # 5. TOOL FUNCTIONS
@@ -383,6 +401,42 @@ def process_query(query: str) -> str:
 """
 
     def render_section_6_graph(self) -> str:
+        if self.config.tools.enabled:
+            return f"""\
+# =============================================================================
+# 6. AGENT CONSTRUCTION
+# =============================================================================
+{_principle_comments(6)}
+# Pi uses declarative agent configuration. The agent execution loop
+# is managed by the framework — you configure, Pi orchestrates.
+
+
+def create_agent_config() -> dict[str, Any]:
+    \"\"\"Create the declarative agent configuration.
+
+    Returns a config dict that Pi uses to set up the agent's model,
+    tools, workspace, and execution parameters.
+    Tools are discovered from tools/ directory and filtered through tool_policy.
+    \"\"\"
+    if not TOOL_REGISTRY:
+        log_invocation("tools", "No tools available — running in inference-only mode")
+
+    return {{
+        "model": {{
+            "primary": CONFIG.model_id,
+            "region": CONFIG.region,
+            "max_tokens": CONFIG.max_tokens,
+            "temperature": CONFIG.temperature,
+        }},
+        "tools": list(TOOL_REGISTRY.keys()),
+        "workspace": str(BASE_DIR),
+        "operational": {{
+            "max_iterations": 10,
+            "timeout_seconds": 120,
+        }},
+    }}
+"""
+
         return f"""\
 # =============================================================================
 # 6. AGENT CONSTRUCTION

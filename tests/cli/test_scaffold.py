@@ -17,6 +17,7 @@ from cli.scaffold import (
     SessionConfig,
     SkillsConfig,
     ToolGovernanceConfig,
+    ToolsConfig,
 )
 
 # ---------------------------------------------------------------------------
@@ -49,6 +50,7 @@ def _make_config(
     langsmith: LangSmithConfig | None = None,
     sessions: SessionConfig | None = None,
     skills: SkillsConfig | None = None,
+    tools: ToolsConfig | None = None,
     observability: ObservabilityConfig | None = None,
 ) -> ScaffoldConfig:
     output_dir = str(tmp_path / "test-agent") if tmp_path else "./test-agent"
@@ -68,6 +70,7 @@ def _make_config(
         langsmith=langsmith or LangSmithConfig(),
         sessions=sessions or SessionConfig(),
         skills=skills or SkillsConfig(),
+        tools=tools or ToolsConfig(),
         observability=observability or ObservabilityConfig(),
     )
 
@@ -149,6 +152,18 @@ def _make_skills_config(
         framework=framework,
         tmp_path=tmp_path,
         skills=SkillsConfig(enabled=True),
+    )
+
+
+def _make_tools_config(
+    framework: str = "langgraph",
+    tmp_path: Path | None = None,
+) -> ScaffoldConfig:
+    """Create a config with tools enabled."""
+    return _make_config(
+        framework=framework,
+        tmp_path=tmp_path,
+        tools=ToolsConfig(enabled=True),
     )
 
 
@@ -2460,4 +2475,319 @@ class TestObservabilityWithLangSmith:
         agent_source = (output_path / "agent.py").read_text()
         ast.parse(agent_source)
         assert "from observability import" in agent_source
+
+
+# ---------------------------------------------------------------------------
+# ToolsConfig tests
+# ---------------------------------------------------------------------------
+
+
+class TestToolsConfig:
+    """Test ToolsConfig dataclass."""
+
+    def test_defaults(self) -> None:
+        tc = ToolsConfig()
+        assert tc.enabled is False
+        assert tc.tools_dir == "tools"
+
+    def test_enabled(self) -> None:
+        tc = ToolsConfig(enabled=True)
+        assert tc.enabled is True
+
+    def test_scaffold_config_default(self) -> None:
+        config = _make_config()
+        assert config.tools.enabled is False
+
+
+# ---------------------------------------------------------------------------
+# Tools generation tests
+# ---------------------------------------------------------------------------
+
+
+class TestToolsGeneration:
+    """Test that tools/ directory is generated correctly when enabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tools_init_exists(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_tools_config(framework, tmp_path)
+        output_path = ScaffoldGenerator(config).generate()
+        assert (output_path / "tools" / "__init__.py").exists()
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tools_example_exists(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_tools_config(framework, tmp_path)
+        output_path = ScaffoldGenerator(config).generate()
+        assert (output_path / "tools" / "example_tool.py").exists()
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tools_init_valid_python(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_tools_config(framework, tmp_path)
+        output_path = ScaffoldGenerator(config).generate()
+        source = (output_path / "tools" / "__init__.py").read_text()
+        ast.parse(source)
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tools_example_valid_python(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_tools_config(framework, tmp_path)
+        output_path = ScaffoldGenerator(config).generate()
+        source = (output_path / "tools" / "example_tool.py").read_text()
+        ast.parse(source)
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tools_init_has_key_classes(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_tools_config(framework, tmp_path)
+        output_path = ScaffoldGenerator(config).generate()
+        source = (output_path / "tools" / "__init__.py").read_text()
+        tree = ast.parse(source)
+        class_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+        ]
+        for expected in ["ToolMetadata", "ToolDefinition", "ToolRegistry"]:
+            assert expected in class_names, f"{expected} not found"
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tools_init_has_key_functions(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_tools_config(framework, tmp_path)
+        output_path = ScaffoldGenerator(config).generate()
+        source = (output_path / "tools" / "__init__.py").read_text()
+        tree = ast.parse(source)
+        func_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        ]
+        for expected in ["discover_tools", "get_permitted_tools"]:
+            assert expected in func_names, f"{expected} not found"
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_example_tool_has_metadata(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_tools_config(framework, tmp_path)
+        output_path = ScaffoldGenerator(config).generate()
+        source = (output_path / "tools" / "example_tool.py").read_text()
+        assert "TOOL_METADATA" in source
+        assert "TOOL_RESOURCES" in source
+
+
+class TestToolsNotGeneratedWhenDisabled:
+    """Test that tools/ directory is NOT generated when disabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tools_dir_absent(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_config(framework, tmp_path)
+        output_path = ScaffoldGenerator(config).generate()
+        assert not (output_path / "tools").exists()
+
+
+# ---------------------------------------------------------------------------
+# Tools config.yaml tests
+# ---------------------------------------------------------------------------
+
+
+class TestToolsConfigYaml:
+    """Test config.yaml tools section."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_config_yaml_has_tools_section(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_tools_config(framework, tmp_path)
+        output_path = ScaffoldGenerator(config).generate()
+        config_yaml = (output_path / "config.yaml").read_text()
+        assert "tool_functions:" in config_yaml
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_config_yaml_no_tools_section_when_disabled(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_config(framework, tmp_path)
+        output_path = ScaffoldGenerator(config).generate()
+        config_yaml = (output_path / "config.yaml").read_text()
+        assert "tool_functions:" not in config_yaml
+
+
+# ---------------------------------------------------------------------------
+# Tools README tests
+# ---------------------------------------------------------------------------
+
+
+class TestToolsReadme:
+    """Test README.md tools section."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_readme_has_tools_section(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_tools_config(framework, tmp_path)
+        output_path = ScaffoldGenerator(config).generate()
+        readme = (output_path / "README.md").read_text()
+        assert "tools/" in readme
+        assert "Uniform Tool Format" in readme
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_readme_no_tools_section_when_disabled(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_config(framework, tmp_path)
+        output_path = ScaffoldGenerator(config).generate()
+        readme = (output_path / "README.md").read_text()
+        assert "Uniform Tool Format" not in readme
+
+
+# ---------------------------------------------------------------------------
+# Section 5/6 with tools tests
+# ---------------------------------------------------------------------------
+
+
+class TestSection5WithTools:
+    """Test section 5 has tools imports when enabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_section_5_has_tools_import(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_tools_config(framework, tmp_path)
+        output_path = ScaffoldGenerator(config).generate()
+        agent_source = (output_path / "agent.py").read_text()
+        assert "from tools import get_permitted_tools" in agent_source
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_section_5_no_tools_import_when_disabled(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_config(framework, tmp_path)
+        output_path = ScaffoldGenerator(config).generate()
+        agent_source = (output_path / "agent.py").read_text()
+        assert "from tools import" not in agent_source
+
+
+class TestSection6WithTools:
+    """Test section 6 has active tool governance when enabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_section_6_valid_python(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_tools_config(framework, tmp_path)
+        output_path = ScaffoldGenerator(config).generate()
+        agent_source = (output_path / "agent.py").read_text()
+        ast.parse(agent_source)
+
+
+class TestToolsFailover:
+    """Test section 6 contains inference-only fallback when tools enabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_inference_only_fallback_present(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_tools_config(framework, tmp_path)
+        output_path = ScaffoldGenerator(config).generate()
+        agent_source = (output_path / "agent.py").read_text()
+        assert "inference-only mode" in agent_source
+
+
+# ---------------------------------------------------------------------------
+# Tools + Observability combined
+# ---------------------------------------------------------------------------
+
+
+class TestToolsWithObservability:
+    """Test tools and observability work together."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_py_valid_with_both(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_config(
+            framework, tmp_path,
+            tools=ToolsConfig(enabled=True),
+            observability=ObservabilityConfig(enabled=True),
+        )
+        output_path = ScaffoldGenerator(config).generate()
+        agent_source = (output_path / "agent.py").read_text()
+        ast.parse(agent_source)
+        tools_init = (output_path / "tools" / "__init__.py").read_text()
+        ast.parse(tools_init)
+        assert "from observability import get_logger" in tools_init
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tools_init_uses_stdlib_logging_without_observability(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_tools_config(framework, tmp_path)
+        output_path = ScaffoldGenerator(config).generate()
+        tools_init = (output_path / "tools" / "__init__.py").read_text()
+        assert "import logging" in tools_init
+        assert "from observability" not in tools_init
+
+
+# ---------------------------------------------------------------------------
+# Tools + Skills combined
+# ---------------------------------------------------------------------------
+
+
+class TestToolsWithSkills:
+    """Test tools and skills work together (complementary, not conflicting)."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_py_valid_with_both(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        config = _make_config(
+            framework, tmp_path,
+            tools=ToolsConfig(enabled=True),
+            skills=SkillsConfig(enabled=True),
+        )
+        output_path = ScaffoldGenerator(config).generate()
+        agent_source = (output_path / "agent.py").read_text()
+        ast.parse(agent_source)
+        assert (output_path / "tools" / "__init__.py").exists()
+        assert (output_path / "capabilities.py").exists()
+
+
+# ---------------------------------------------------------------------------
+# Wizard tools flow tests
+# ---------------------------------------------------------------------------
+
+
+class TestWizardToolsFlow:
+    """Test _ask_tools wizard step."""
+
+    def test_ask_tools_enabled(self) -> None:
+        from cli.commands.scaffold import _ask_tools
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.confirm.return_value.ask.return_value = True
+            result = _ask_tools()
+            assert result.enabled is True
+
+    def test_ask_tools_disabled(self) -> None:
+        from cli.commands.scaffold import _ask_tools
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.confirm.return_value.ask.return_value = False
+            result = _ask_tools()
+            assert result.enabled is False
+
+    def test_ask_tools_abort(self) -> None:
+        from cli.commands.scaffold import _ask_tools
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.confirm.return_value.ask.return_value = None
+            with pytest.raises(typer.Abort):
+                _ask_tools()
 

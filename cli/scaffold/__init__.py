@@ -70,6 +70,14 @@ class SkillsConfig:
 
 
 @dataclass
+class ToolsConfig:
+    """Configuration for tool availability and structure."""
+
+    enabled: bool = False
+    tools_dir: str = "tools"
+
+
+@dataclass
 class ObservabilityConfig:
     """Configuration for Principle 17: Observability, Audit, and Accountability."""
 
@@ -111,6 +119,7 @@ class ScaffoldConfig:
     langsmith: LangSmithConfig = field(default_factory=LangSmithConfig)
     sessions: SessionConfig = field(default_factory=SessionConfig)
     skills: SkillsConfig = field(default_factory=SkillsConfig)
+    tools: ToolsConfig = field(default_factory=ToolsConfig)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
 
     def validate(self) -> None:
@@ -216,6 +225,11 @@ class ScaffoldGenerator:
             files[
                 "skills/example-skill/SKILL.md"
             ] = template.render_example_skill_md()
+
+        if self.config.tools.enabled:
+            (output_path / "tools").mkdir(exist_ok=True)
+            files["tools/__init__.py"] = template.render_tools_init_py()
+            files["tools/example_tool.py"] = template.render_example_tool_py()
 
         if self.config.observability.enabled:
             files["observability.py"] = template.render_observability_py()

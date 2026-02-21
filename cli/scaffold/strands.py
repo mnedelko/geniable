@@ -206,6 +206,18 @@ class AgentState:
 """
 
     def render_section_5_worker(self) -> str:
+        if self.config.tools.enabled:
+            return f"""\
+# =============================================================================
+# 5. TOOL FUNCTIONS
+# =============================================================================
+{_principle_comments(5)}
+from tools import get_permitted_tools
+
+# Tools are discovered from tools/ directory and filtered by tool_policy.
+# The permitted tools are passed to Agent(tools=[...]) in Section 6.
+"""
+
         return f"""\
 # =============================================================================
 # 5. TOOL FUNCTIONS
@@ -226,6 +238,36 @@ def process_query_tool(query: str) -> str:
 """
 
     def render_section_6_graph(self) -> str:
+        if self.config.tools.enabled:
+            return f"""\
+# =============================================================================
+# 6. AGENT CONSTRUCTION
+# =============================================================================
+{_principle_comments(6)}
+
+def create_agent():
+    \"\"\"Create the Strands agent with discovered tools and governance.\"\"\"
+    from strands import Agent
+
+    system_prompt = load_system_prompt()
+    model = get_model()
+
+    # Tool Governance (Principle 9): discover and filter tools from tools/ directory
+    permitted = get_permitted_tools()
+    if permitted:
+        permitted_tools = [t["function"] for t in permitted]
+    else:
+        log_invocation("tools", "No tools available — running in inference-only mode")
+        permitted_tools = []
+
+    agent = Agent(
+        model=model,
+        system_prompt=system_prompt,
+        tools=permitted_tools,
+    )
+    return agent
+"""
+
         return f"""\
 # =============================================================================
 # 6. AGENT CONSTRUCTION
