@@ -1,6 +1,6 @@
 # Geniable
 
-**Hybrid Local-Cloud QA Pipeline for LangSmith Thread Analysis**
+**Framework agnostic agentic project-configuration wizard and Local-Cloud QA Pipeline for LangSmith Thread Analysis**
 
 Geniable analyzes your LangSmith conversation threads for quality issues, performance problems, and errors—then creates tickets in Jira or Notion automatically.
 
