@@ -2552,7 +2552,7 @@ class TestToolsGeneration:
         class_names = [
             node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
         ]
-        for expected in ["ToolMetadata", "ToolDefinition", "ToolRegistry"]:
+        for expected in ["AgentTool", "ToolParameter", "ToolMetadata", "ToolDefinition", "ToolRegistry"]:
             assert expected in class_names, f"{expected} not found"
 
     @pytest.mark.parametrize("framework", FRAMEWORKS)
@@ -2570,14 +2570,28 @@ class TestToolsGeneration:
             assert expected in func_names, f"{expected} not found"
 
     @pytest.mark.parametrize("framework", FRAMEWORKS)
-    def test_example_tool_has_metadata(
+    def test_example_tool_is_agent_tool(
         self, framework: str, tmp_path: Path,
     ) -> None:
         config = _make_tools_config(framework, tmp_path)
         output_path = ScaffoldGenerator(config).generate()
         source = (output_path / "tools" / "example_tool.py").read_text()
-        assert "TOOL_METADATA" in source
-        assert "TOOL_RESOURCES" in source
+        assert "class ExampleTool" in source
+        assert "AgentTool" in source
+        assert "resources" in source
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_tools_init_has_agent_tool_abc(
+        self, framework: str, tmp_path: Path,
+    ) -> None:
+        """Verify AgentTool is an ABC with abstract execute method."""
+        config = _make_tools_config(framework, tmp_path)
+        output_path = ScaffoldGenerator(config).generate()
+        source = (output_path / "tools" / "__init__.py").read_text()
+        assert "class AgentTool(ABC):" in source
+        assert "def execute(self" in source
+        assert "@abstractmethod" in source
+        assert "def as_function(self" in source
 
 
 class TestToolsNotGeneratedWhenDisabled:
@@ -2635,7 +2649,7 @@ class TestToolsReadme:
         output_path = ScaffoldGenerator(config).generate()
         readme = (output_path / "README.md").read_text()
         assert "tools/" in readme
-        assert "Uniform Tool Format" in readme
+        assert "Unified Tool Interface" in readme
 
     @pytest.mark.parametrize("framework", FRAMEWORKS)
     def test_readme_no_tools_section_when_disabled(

@@ -4043,36 +4043,40 @@ integration, and progressive disclosure:
 
 | Component | Purpose |
 |-----------|---------|
-| `tools/__init__.py` | Registry, discovery, governance integration |
-| `tools/example_tool.py` | Complete example in the uniform 4-section format |
+| `tools/__init__.py` | `AgentTool` ABC, registry, discovery, governance |
+| `tools/example_tool.py` | Complete example — subclass of `AgentTool` |
 | `tool_policy.py` | Governance — profiles, deny lists, sub-agent restrictions |
 
-### Uniform Tool Format
+### Unified Tool Interface
 
-Each tool file follows this 4-section structure:
+Each tool file defines one `AgentTool` subclass — one class = one tool:
 
 ```python
-# SECTION 1: METADATA — Tier 1 summary for system prompt
-TOOL_METADATA = {"name": "...", "description": "...", ...}
+from tools import AgentTool, ToolParameter
 
-# SECTION 2: CONFIGURATION — tool-specific settings from config.yaml
-# SECTION 3: IMPLEMENTATION — the tool function (same name as TOOL_METADATA["name"])
-# SECTION 4: RESOURCES — Tier 3 runtime references
-TOOL_RESOURCES = {"docs": "...", ...}
+class MyTool(AgentTool):
+    name = "my_tool"
+    description = "Short description for system prompt (~100 words)."
+    parameters = {"query": ToolParameter(type="str", description="Input")}
+    resources = {"docs": "https://..."}   # Tier 3: loaded at execution time
+
+    def execute(self, **kwargs):
+        return f"Result: {kwargs['query']}"
 ```
 
 ### Adding a New Tool
 
-1. Create `tools/my_tool.py` following the uniform format
-2. The registry discovers it automatically at startup
-3. Tool governance (`tool_policy.py`) filters it based on the active profile
-4. The agent framework adapts it (bind_tools / Agent(tools=...) / TOOL_REGISTRY)
+1. Create `tools/my_tool.py` with a class that extends `AgentTool`
+2. Set `name`, `description`, `parameters`, and implement `execute()`
+3. The registry discovers it automatically at startup
+4. Tool governance (`tool_policy.py`) filters it based on the active profile
+5. The agent framework adapts it (bind_tools / Agent(tools=...) / TOOL_REGISTRY)
 
 ### Progressive Disclosure
 
-- **Tier 1**: `TOOL_METADATA["description"]` — always in system prompt
-- **Tier 2**: Module docstring — loaded when tool is selected
-- **Tier 3**: `TOOL_RESOURCES` — loaded during execution
+- **Tier 1**: `name` + `description` + `parameters` (class attributes → system prompt)
+- **Tier 2**: Class/method docstrings (loaded when tool is selected)
+- **Tier 3**: `resources` dict (loaded during execution)
 
 ### Inference-Only Failover
 
@@ -4116,7 +4120,7 @@ class TestToolsSyntax:
         class_names = [
             node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
         ]
-        for expected in ["ToolMetadata", "ToolDefinition", "ToolRegistry"]:
+        for expected in ["AgentTool", "ToolParameter", "ToolMetadata", "ToolDefinition", "ToolRegistry"]:
             assert expected in class_names, f"{expected} class not found in tools/__init__.py"
 
     def test_tools_init_has_key_functions(self):
@@ -4137,24 +4141,25 @@ class TestToolsSyntax:
         source = EXAMPLE_TOOL_FILE.read_text()
         ast.parse(source)
 
-    def test_example_tool_has_metadata(self):
-        \"\"\"Verify example_tool.py contains TOOL_METADATA.\"\"\"
+    def test_example_tool_is_agent_tool(self):
+        \"\"\"Verify example_tool.py defines an AgentTool subclass.\"\"\"
         source = EXAMPLE_TOOL_FILE.read_text()
-        assert "TOOL_METADATA" in source
+        assert "class ExampleTool" in source
+        assert "AgentTool" in source
 
-    def test_example_tool_has_function(self):
-        \"\"\"Verify example_tool.py contains the tool function.\"\"\"
+    def test_example_tool_has_execute(self):
+        \"\"\"Verify example_tool.py contains the execute method.\"\"\"
         source = EXAMPLE_TOOL_FILE.read_text()
         tree = ast.parse(source)
         func_names = [
             node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
         ]
-        assert "example_tool" in func_names
+        assert "execute" in func_names
 
     def test_example_tool_has_resources(self):
-        \"\"\"Verify example_tool.py contains TOOL_RESOURCES.\"\"\"
+        \"\"\"Verify example_tool.py contains resources.\"\"\"
         source = EXAMPLE_TOOL_FILE.read_text()
-        assert "TOOL_RESOURCES" in source
+        assert "resources" in source
 """
 
     # ------------------------------------------------------------------
@@ -4162,9 +4167,10 @@ class TestToolsSyntax:
     # ------------------------------------------------------------------
 
     def render_tools_init_py(self) -> str:
-        """Render the tools/__init__.py — tool registry with progressive disclosure.
+        """Render the tools/__init__.py — unified AgentTool base class.
 
-        Provides discovery, registry, governance integration, and failover.
+        Provides the AgentTool ABC, discovery, registry, governance integration,
+        and backward-compatible aliases.
         """
         if self.config.observability.enabled:
             logger_setup = (
@@ -4178,11 +4184,13 @@ class TestToolsSyntax:
             )
 
         return f'''\
-"""Tool registry — discovery, governance, and progressive disclosure.
+"""Tool registry — unified AgentTool interface with progressive disclosure.
 
 Provides:
-- Tool metadata types with progressive disclosure tiers
-- Auto-discovery of tool modules in the tools/ directory
+- AgentTool ABC — subclass, set fields, implement execute()
+- ToolParameter dataclass for typed parameter schemas
+- Auto-discovery of AgentTool subclasses in the tools/ directory
+- Legacy fallback for TOOL_METADATA dict pattern
 - Registry for lookup and governance integration
 - Graceful failover when no tools are defined
 """
@@ -4190,7 +4198,9 @@ Provides:
 from __future__ import annotations
 
 import importlib
+import inspect
 import sys
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -4199,20 +4209,126 @@ from typing import Any, Callable
 
 
 # =============================================================================
-# 1. TYPES — Progressive Disclosure Tiers
+# 1. TYPES — Unified Tool Interface
 # =============================================================================
 
 
 @dataclass
-class ToolMetadata:
-    """Tier 1 metadata — loaded into system prompt as summary.
+class ToolParameter:
+    """Typed parameter schema for a tool.
 
     Attributes:
-        name: Unique tool identifier.
-        description: Short description (~100 words) for system prompt.
-        version: Semantic version of the tool.
-        category: Tool category (e.g. "utility", "data", "integration").
-        parameters: Parameter schema for the tool function.
+        type: Python type name (e.g. "str", "int", "list[str]").
+        description: Human-readable description of the parameter.
+        required: Whether the parameter is required. Defaults to True.
+        default: Default value if not required.
+    """
+
+    type: str = "str"
+    description: str = ""
+    required: bool = True
+    default: Any = None
+
+
+class AgentTool(ABC):
+    """Unified tool interface — subclass, set fields, implement execute().
+
+    One class = one tool. All core fields are unified on the class:
+
+        class MyTool(AgentTool):
+            name = "my_tool"
+            description = "Does something useful."
+            parameters = {{"query": ToolParameter(type="str", description="Input")}}
+
+            def execute(self, **kwargs: Any) -> Any:
+                return f"Result: {{kwargs['query']}}"
+
+    Progressive Disclosure:
+        - Tier 1: name + description + parameters (system prompt)
+        - Tier 2: Class/method docstrings (loaded when tool is selected)
+        - Tier 3: resources dict (loaded during execution)
+    """
+
+    # Core fields — user sets these on the subclass
+    name: str = ""
+    description: str = ""
+    label: str = ""
+    parameters: dict[str, ToolParameter] = {{}}
+
+    # Optional metadata
+    version: str = "1.0.0"
+    category: str = "utility"
+    resources: dict[str, Any] = {{}}
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Validate required fields at class-definition time."""
+        super().__init_subclass__(**kwargs)
+        # Skip validation for internal/abstract intermediaries
+        if inspect.isabstract(cls):
+            return
+        if not cls.name:
+            raise TypeError(f"{{cls.__name__}} must set 'name'")
+        if not cls.description:
+            raise TypeError(f"{{cls.__name__}} must set 'description'")
+        # Auto-derive label from name if not set
+        if not cls.label:
+            cls.label = cls.name.replace("_", " ").title()
+
+    @abstractmethod
+    def execute(self, **kwargs: Any) -> Any:
+        """Execute the tool. Subclasses must implement this."""
+        ...
+
+    def __call__(self, **kwargs: Any) -> Any:
+        """Convenience — delegates to execute()."""
+        return self.execute(**kwargs)
+
+    # -- Progressive disclosure properties --
+
+    @property
+    def tier1_metadata(self) -> dict[str, Any]:
+        """Tier 1: Summary metadata for system prompt."""
+        return {{
+            "name": self.name,
+            "description": self.description,
+            "label": self.label,
+            "version": self.version,
+            "category": self.category,
+            "parameters": {{
+                k: {{"type": v.type, "description": v.description, "required": v.required}}
+                for k, v in self.parameters.items()
+            }},
+        }}
+
+    @property
+    def tier2_description(self) -> str:
+        """Tier 2: Full docstring — loaded when tool is selected."""
+        return self.execute.__doc__ or self.__class__.__doc__ or self.description
+
+    @property
+    def tier3_resources(self) -> dict[str, Any]:
+        """Tier 3: Runtime references — loaded during execution."""
+        return self.resources
+
+    def as_function(self) -> Callable[..., Any]:
+        """Return a plain callable for framework consumption.
+
+        Patches __name__ and __doc__ so frameworks (LangChain, Strands)
+        can introspect the function correctly.
+        """
+        fn = self.execute
+        fn.__name__ = self.name  # type: ignore[attr-defined]
+        fn.__doc__ = self.description
+        return fn
+
+
+# -- Backward-compatible aliases --
+
+@dataclass
+class ToolMetadata:
+    """Tier 1 metadata — kept for backward compatibility.
+
+    Prefer using AgentTool class attributes directly.
     """
 
     name: str
@@ -4224,13 +4340,9 @@ class ToolMetadata:
 
 @dataclass
 class ToolDefinition:
-    """Complete tool definition with all progressive disclosure tiers.
+    """Complete tool definition — kept for backward compatibility.
 
-    Attributes:
-        metadata: Tier 1 — summary metadata for system prompt.
-        function: The callable tool implementation.
-        resources: Tier 3 — loaded during execution (docs, endpoints, etc.).
-        module_path: Source module path for debugging.
+    Prefer using AgentTool subclasses directly.
     """
 
     metadata: ToolMetadata
@@ -4244,24 +4356,59 @@ class ToolDefinition:
 # =============================================================================
 
 
-def discover_tools(tools_dir: Path | None = None) -> list[ToolDefinition]:
+def _legacy_tool(
+    name: str,
+    description: str,
+    func: Callable[..., Any],
+    version: str = "1.0.0",
+    category: str = "utility",
+    parameters: dict[str, Any] | None = None,
+    resources: dict[str, Any] | None = None,
+) -> AgentTool:
+    """Wrap a legacy TOOL_METADATA dict into an AgentTool instance."""
+    param_objs: dict[str, ToolParameter] = {{}}
+    for pname, pdef in (parameters or {{}}).items():
+        if isinstance(pdef, dict):
+            param_objs[pname] = ToolParameter(
+                type=pdef.get("type", "str"),
+                description=pdef.get("description", ""),
+                required=pdef.get("required", True),
+                default=pdef.get("default"),
+            )
+
+    # Dynamically create an AgentTool subclass
+    tool_cls = type(
+        f"_Legacy_{{name}}",
+        (AgentTool,),
+        {{
+            "name": name,
+            "description": description,
+            "version": version,
+            "category": category,
+            "parameters": param_objs,
+            "resources": resources or {{}},
+            "execute": lambda self, **kwargs: func(**kwargs),
+        }},
+    )
+    return tool_cls()
+
+
+def discover_tools(tools_dir: Path | None = None) -> list[AgentTool]:
     """Discover tool modules in the tools directory.
 
-    Scans for .py files (excluding _ prefixed) that export TOOL_METADATA.
-    Each module must have:
-    - TOOL_METADATA: dict with at least "name" and "description"
-    - A callable function matching TOOL_METADATA["name"]
+    Primary strategy: find AgentTool subclasses in modules.
+    Fallback strategy: wrap legacy TOOL_METADATA dicts into AgentTool instances.
 
     Args:
-        tools_dir: Directory to scan. Defaults to this package\'s directory.
+        tools_dir: Directory to scan. Defaults to this package's directory.
 
     Returns:
-        List of discovered ToolDefinition instances.
+        List of discovered AgentTool instances.
     """
     if tools_dir is None:
         tools_dir = Path(__file__).parent
 
-    tools: list[ToolDefinition] = []
+    tools: list[AgentTool] = []
 
     for path in sorted(tools_dir.glob("*.py")):
         if path.name.startswith("_"):
@@ -4269,16 +4416,33 @@ def discover_tools(tools_dir: Path | None = None) -> list[ToolDefinition]:
 
         module_name = path.stem
         try:
-            # Add parent to sys.path if needed for import
             parent_str = str(tools_dir.parent)
             if parent_str not in sys.path:
                 sys.path.insert(0, parent_str)
 
             module = importlib.import_module(f"tools.{{module_name}}")
 
+            # Primary: find AgentTool subclasses
+            found_subclass = False
+            for _attr_name in dir(module):
+                obj = getattr(module, _attr_name)
+                if (
+                    isinstance(obj, type)
+                    and issubclass(obj, AgentTool)
+                    and obj is not AgentTool
+                    and not inspect.isabstract(obj)
+                ):
+                    tools.append(obj())
+                    found_subclass = True
+                    logger.debug("Discovered tool: %s (v%s)", obj.name, obj.version)
+
+            if found_subclass:
+                continue
+
+            # Fallback: legacy TOOL_METADATA dict pattern
             metadata_dict = getattr(module, "TOOL_METADATA", None)
             if metadata_dict is None:
-                logger.debug("Skipping %s — no TOOL_METADATA", module_name)
+                logger.debug("Skipping %s — no AgentTool subclass or TOOL_METADATA", module_name)
                 continue
 
             tool_name = metadata_dict.get("name", module_name)
@@ -4291,25 +4455,18 @@ def discover_tools(tools_dir: Path | None = None) -> list[ToolDefinition]:
                 )
                 continue
 
-            meta = ToolMetadata(
+            resources = getattr(module, "TOOL_RESOURCES", {{}})
+            tool_instance = _legacy_tool(
                 name=tool_name,
                 description=metadata_dict.get("description", ""),
+                func=func,
                 version=metadata_dict.get("version", "1.0.0"),
                 category=metadata_dict.get("category", "utility"),
                 parameters=metadata_dict.get("parameters", {{}}),
+                resources=resources,
             )
-
-            resources = getattr(module, "TOOL_RESOURCES", {{}})
-
-            tools.append(
-                ToolDefinition(
-                    metadata=meta,
-                    function=func,
-                    resources=resources,
-                    module_path=str(path),
-                )
-            )
-            logger.debug("Discovered tool: %s (v%s)", tool_name, meta.version)
+            tools.append(tool_instance)
+            logger.debug("Discovered legacy tool: %s (v%s)", tool_name, tool_instance.version)
 
         except Exception as exc:
             logger.warning("Failed to load tool module %s: %s", module_name, exc)
@@ -4331,42 +4488,42 @@ def discover_tools(tools_dir: Path | None = None) -> list[ToolDefinition]:
 class ToolRegistry:
     """Registry for discovered tools with progressive disclosure access.
 
-    Provides Tier 1 (metadata), Tier 2 (docstring/description), and
-    Tier 3 (resources) access patterns.
+    Stores AgentTool instances with Tier 1 (metadata), Tier 2 (docstring),
+    and Tier 3 (resources) access patterns.
     """
 
     def __init__(self) -> None:
-        self._tools: dict[str, ToolDefinition] = {{}}
+        self._tools: dict[str, AgentTool] = {{}}
 
-    def register(self, tool: ToolDefinition) -> None:
-        """Register a tool definition."""
-        self._tools[tool.metadata.name] = tool
+    def register(self, tool: AgentTool) -> None:
+        """Register an AgentTool instance."""
+        self._tools[tool.name] = tool
 
-    def get_all(self) -> list[ToolDefinition]:
-        """Get all registered tool definitions."""
+    def get_all(self) -> list[AgentTool]:
+        """Get all registered tools."""
         return list(self._tools.values())
 
-    def get(self, name: str) -> ToolDefinition | None:
+    def get(self, name: str) -> AgentTool | None:
         """Get a single tool by name."""
         return self._tools.get(name)
 
-    def get_metadata(self) -> list[ToolMetadata]:
+    def get_metadata(self) -> list[dict[str, Any]]:
         """Tier 1: Get metadata summaries for all tools."""
-        return [t.metadata for t in self._tools.values()]
+        return [t.tier1_metadata for t in self._tools.values()]
 
     def get_description(self, name: str) -> str:
         """Tier 2: Get full docstring/description for a specific tool."""
         tool = self._tools.get(name)
         if tool is None:
             return ""
-        return tool.function.__doc__ or tool.metadata.description
+        return tool.tier2_description
 
     def get_resources(self, name: str) -> dict[str, Any]:
         """Tier 3: Get runtime resources for a specific tool."""
         tool = self._tools.get(name)
         if tool is None:
             return {{}}
-        return tool.resources
+        return tool.tier3_resources
 
     @property
     def names(self) -> list[str]:
@@ -4385,18 +4542,17 @@ class ToolRegistry:
 def get_permitted_tools(
     tools_dir: Path | None = None,
     is_subagent: bool = False,
-) -> list[dict[str, Any]]:
+) -> list[AgentTool]:
     """Discover tools and filter through governance policy.
 
-    Returns a list of dicts with "name", "function", "metadata", and
-    "resources" keys for each permitted tool.
+    Returns a list of AgentTool instances that pass the governance filter.
 
     Args:
         tools_dir: Directory to scan for tool modules.
         is_subagent: If True, apply sub-agent restrictions.
 
     Returns:
-        List of permitted tool dicts. Empty list if no tools available.
+        List of permitted AgentTool instances. Empty list if no tools available.
     """
     discovered = discover_tools(tools_dir)
     if not discovered:
@@ -4404,8 +4560,8 @@ def get_permitted_tools(
 
     # Build a registry from discovered tools
     registry = ToolRegistry()
-    for tool_def in discovered:
-        registry.register(tool_def)
+    for tool in discovered:
+        registry.register(tool)
 
     # Filter through tool governance
     try:
@@ -4418,33 +4574,29 @@ def get_permitted_tools(
         permitted_names = registry.names
 
     return [
-        {{
-            "name": name,
-            "function": registry.get(name).function,  # type: ignore[union-attr]
-            "metadata": registry.get(name).metadata,  # type: ignore[union-attr]
-            "resources": registry.get(name).resources,  # type: ignore[union-attr]
-        }}
+        registry.get(name)
         for name in permitted_names
         if registry.get(name) is not None
     ]
 '''
 
     def render_example_tool_py(self) -> str:
-        """Render the tools/example_tool.py — a complete tool in uniform format."""
+        """Render the tools/example_tool.py — a complete AgentTool subclass."""
         return '''\
-"""example_tool — Demonstrate the uniform tool format.
+"""example_tool — Demonstrate the unified AgentTool interface.
 
-This is a complete example of a tool following the 4-section structure.
-Each tool file in the tools/ directory follows this pattern so that the
-registry can auto-discover and load it.
+This is a complete example of a tool using the AgentTool base class.
+Each tool file in the tools/ directory defines one class that the
+registry auto-discovers and loads.
 
 Progressive Disclosure Tiers:
-- Tier 1: TOOL_METADATA["description"] is included in the system prompt
-- Tier 2: This module docstring provides full instructions when loaded
-- Tier 3: TOOL_RESOURCES provides runtime references (docs, endpoints)
+- Tier 1: name + description + parameters (class attributes → system prompt)
+- Tier 2: Class/method docstrings (loaded when tool is selected)
+- Tier 3: resources dict (loaded during execution)
 
 Usage:
-    result = example_tool(query="hello world")
+    tool = ExampleTool()
+    result = tool.execute(query="hello world")
     # Returns: "Processed: hello world"
 """
 
@@ -4453,93 +4605,82 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-# =============================================================================
-# SECTION 1: METADATA — Tier 1 (loaded into system prompt as summary)
-# =============================================================================
+from tools import AgentTool, ToolParameter
 
-TOOL_METADATA: dict[str, Any] = {
-    "name": "example_tool",
-    "description": (
+
+class ExampleTool(AgentTool):
+    """Example tool that processes a query string.
+
+    Replace this class with your actual tool implementation.
+    Keep the description under ~100 words for efficient system prompt usage.
+    """
+
+    name = "example_tool"
+    description = (
         "Example tool that processes a query string. "
         "Replace this with your actual tool description. "
         "Keep under ~100 words for efficient system prompt usage."
-    ),
-    "version": "1.0.0",
-    "category": "utility",
-    "parameters": {
-        "query": {
-            "type": "str",
-            "description": "The input string to process",
-            "required": True,
-        },
-    },
-}
+    )
+    label = "Example Tool"
+    parameters = {
+        "query": ToolParameter(
+            type="str",
+            description="The input string to process",
+            required=True,
+        ),
+    }
+    version = "1.0.0"
+    category = "utility"
+    resources = {
+        "docs": "https://docs.example.com/tools/example",
+        "changelog": "https://docs.example.com/tools/example/changelog",
+    }
 
+    def _load_config(self) -> dict[str, Any]:
+        """Load tool-specific configuration from config.yaml.
 
-# =============================================================================
-# SECTION 2: CONFIGURATION — tool-specific settings from config.yaml
-# =============================================================================
+        Reads from the tools.<tool_name> section of config.yaml.
+        Returns empty dict if not configured.
+        """
+        config_path = Path(__file__).parent.parent / "config.yaml"
+        if not config_path.exists():
+            return {}
 
-def _load_tool_config() -> dict[str, Any]:
-    """Load tool-specific configuration from config.yaml.
+        try:
+            import yaml
 
-    Reads from the tools.<tool_name> section of config.yaml.
-    Returns empty dict if not configured.
-    """
-    config_path = Path(__file__).parent.parent / "config.yaml"
-    if not config_path.exists():
-        return {}
+            with open(config_path) as f:
+                full_config = yaml.safe_load(f) or {}
 
-    try:
-        import yaml
+            tools_cfg = full_config.get("tools", {})
+            return tools_cfg.get(self.name, {})
+        except Exception:
+            return {}
 
-        with open(config_path) as f:
-            full_config = yaml.safe_load(f) or {}
+    def execute(self, **kwargs: Any) -> Any:
+        """Process a query string and return the result.
 
-        tools_cfg = full_config.get("tools", {})
-        return tools_cfg.get("example_tool", {})
-    except Exception:
-        return {}
+        This is a placeholder implementation. Replace the body with your
+        actual tool logic.
 
+        Args:
+            **kwargs: Must include "query" (str).
 
-# =============================================================================
-# SECTION 3: IMPLEMENTATION — the actual tool logic
-# =============================================================================
+        Returns:
+            Processed result string.
 
+        Example:
+            >>> ExampleTool().execute(query="hello world")
+            \'Processed: hello world\'
+        """
+        query: str = kwargs["query"]
 
-def example_tool(query: str) -> str:
-    """Process a query string and return the result.
+        # Load any tool-specific config
+        _config = self._load_config()
+        _timeout = _config.get("timeout_seconds", 30)
 
-    This is a placeholder implementation. Replace the body with your
-    actual tool logic while keeping the function signature and docstring
-    pattern.
-
-    Args:
-        query: The input string to process.
-
-    Returns:
-        Processed result string.
-
-    Example:
-        >>> example_tool("hello world")
-        'Processed: hello world'
-    """
-    # Load any tool-specific config
-    _config = _load_tool_config()
-    _timeout = _config.get("timeout_seconds", 30)
-
-    # --- Replace this with your actual implementation ---
-    return f"Processed: {query}"
-
-
-# =============================================================================
-# SECTION 4: RESOURCES — Tier 3 (loaded during execution)
-# =============================================================================
-
-TOOL_RESOURCES: dict[str, Any] = {
-    "docs": "https://docs.example.com/tools/example",
-    "changelog": "https://docs.example.com/tools/example/changelog",
-}
+        # --- Replace this with your actual implementation ---
+        return f"Processed: {query}"
 '''
 
     def render_example_skill_md(self) -> str:

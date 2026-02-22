@@ -250,9 +250,9 @@ def worker(state: AgentState) -> dict:
 
             tools_for_llm = [
                 StructuredTool.from_function(
-                    func=t["function"],
-                    name=t["name"],
-                    description=t["metadata"].description,
+                    func=t.as_function(),
+                    name=t.name,
+                    description=t.description,
                 )
                 for t in permitted
             ]
