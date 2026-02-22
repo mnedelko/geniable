@@ -360,8 +360,12 @@ from tools import get_permitted_tools
 TOOL_REGISTRY: dict[str, Any] = {{}}
 
 # Populate registry from discovered tools
-for _tool_def in get_permitted_tools():
-    TOOL_REGISTRY[_tool_def["name"]] = _tool_def
+for _tool in get_permitted_tools():
+    TOOL_REGISTRY[_tool.name] = {{
+        "function": _tool.as_function(),
+        "name": _tool.name,
+        "description": _tool.description,
+    }}
 """
 
         return f"""\

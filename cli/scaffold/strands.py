@@ -255,7 +255,7 @@ def create_agent():
     # Tool Governance (Principle 9): discover and filter tools from tools/ directory
     permitted = get_permitted_tools()
     if permitted:
-        permitted_tools = [t["function"] for t in permitted]
+        permitted_tools = [t.as_function() for t in permitted]
     else:
         log_invocation("tools", "No tools available — running in inference-only mode")
         permitted_tools = []
