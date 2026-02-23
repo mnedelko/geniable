@@ -2558,7 +2558,7 @@ class TestConfig:
         ]
         assert "Config" in class_names, "Config class not found in agent.py"
         assert "EvaluatorOutput" in class_names, "EvaluatorOutput class not found"
-{self._render_test_tracing()}{self._render_test_sessions()}{self._render_test_skills()}{self._render_test_tools()}{self._render_test_observability()}"""
+{self._render_test_tracing()}{self._render_test_sessions()}{self._render_test_skills()}{self._render_test_tools()}{self._render_test_observability()}{self._render_test_identity()}"""
 
     # ------------------------------------------------------------------
     # sessions.py — Session Persistence (Principle 11)
@@ -4014,6 +4014,82 @@ class TestObservabilitySyntax:
             assert expected in func_names, f"{expected} function not found in observability.py"
 """
 
+    def _render_test_identity(self) -> str:
+        """Render identity layer tests for generated test_agent.py, or empty string."""
+        if not self.config.identity.enabled:
+            return ""
+        layers_list = ", ".join(f'"{layer.upper()}.md"' for layer in self.config.identity.layers)
+        return f"""
+
+
+BRIEF_PACKET_FILE = Path(__file__).parent.parent / "brief_packet.py"
+IDENTITY_ACCESS_FILE = Path(__file__).parent.parent / "identity_access.py"
+IDENTITY_DIR = Path(__file__).parent.parent / "identity"
+
+
+class TestBriefPacketSyntax:
+    \"\"\"Verify generated brief_packet.py is syntactically valid Python.\"\"\"
+
+    def test_brief_packet_file_exists(self):
+        assert BRIEF_PACKET_FILE.exists(), f"brief_packet.py not found at {{BRIEF_PACKET_FILE}}"
+
+    def test_brief_packet_parses(self):
+        \"\"\"Ensure brief_packet.py is valid Python syntax.\"\"\"
+        source = BRIEF_PACKET_FILE.read_text()
+        ast.parse(source)
+
+    def test_brief_packet_has_key_functions(self):
+        \"\"\"Verify brief_packet.py contains required functions.\"\"\"
+        source = BRIEF_PACKET_FILE.read_text()
+        tree = ast.parse(source)
+        func_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        ]
+        for expected in ["assemble_brief_packet", "_truncate", "_read_layer", "_build_runtime_context"]:
+            assert expected in func_names, f"{{expected}} function not found in brief_packet.py"
+
+
+class TestIdentityAccessSyntax:
+    \"\"\"Verify generated identity_access.py is syntactically valid Python.\"\"\"
+
+    def test_identity_access_file_exists(self):
+        assert IDENTITY_ACCESS_FILE.exists(), f"identity_access.py not found at {{IDENTITY_ACCESS_FILE}}"
+
+    def test_identity_access_parses(self):
+        \"\"\"Ensure identity_access.py is valid Python syntax.\"\"\"
+        source = IDENTITY_ACCESS_FILE.read_text()
+        ast.parse(source)
+
+    def test_identity_access_has_key_functions(self):
+        \"\"\"Verify identity_access.py contains required functions.\"\"\"
+        source = IDENTITY_ACCESS_FILE.read_text()
+        tree = ast.parse(source)
+        func_names = [
+            node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        ]
+        for expected in ["can_modify", "modify_layer", "list_backups", "restore_backup"]:
+            assert expected in func_names, f"{{expected}} function not found in identity_access.py"
+
+
+class TestIdentityLayers:
+    \"\"\"Verify identity layer files are present.\"\"\"
+
+    def test_identity_dir_exists(self):
+        assert IDENTITY_DIR.exists(), f"identity/ directory not found at {{IDENTITY_DIR}}"
+
+    def test_expected_layers_present(self):
+        \"\"\"Verify all configured identity layer files exist.\"\"\"
+        expected_layers = [{layers_list}]
+        for layer_file in expected_layers:
+            path = IDENTITY_DIR / layer_file
+            assert path.exists(), f"Identity layer {{layer_file}} not found at {{path}}"
+
+    def test_backups_dir_exists(self):
+        \"\"\"Verify identity/.backups/ directory exists for versioning.\"\"\"
+        backups_dir = IDENTITY_DIR / ".backups"
+        assert backups_dir.exists(), f".backups/ directory not found at {{backups_dir}}"
+"""
+
     # ------------------------------------------------------------------
     # Tools helpers
     # ------------------------------------------------------------------
@@ -5303,10 +5379,18 @@ def list_resources(skill: SkillMetadata) -> list[str]:
 
 Assembles the system prompt from independent identity layer files,
 enabling modular updates without touching agent code.
+
+Includes runtime context injection and assembly logging for
+debugging and audit purposes.
 """
 
 from __future__ import annotations
 
+import datetime
+import logging
+import os
+import platform
+import sys
 from pathlib import Path
 
 IDENTITY_DIR = Path(__file__).parent / "identity"
@@ -5325,6 +5409,8 @@ LAYER_FILES: dict[str, str] = {
 MINIMAL_LAYERS = ("rules", "tools")
 
 MAX_CHARS = 20_000
+
+logger = logging.getLogger("brief_packet")
 
 
 def _truncate(text: str, max_chars: int = MAX_CHARS) -> str:
@@ -5346,17 +5432,75 @@ def _read_layer(filename: str) -> str:
     return _truncate(text)
 
 
+def _build_runtime_context() -> str:
+    """Build runtime context metadata for prompt injection.
+
+    Gathers timestamp, host, OS, Python version, and model info
+    from config.yaml (if available).
+    """
+    lines = [
+        "# RUNTIME CONTEXT",
+        "",
+        f"- timestamp: {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+        f"- hostname: {platform.node()}",
+        f"- os: {platform.system()} {platform.release()}",
+        f"- python: {sys.version.split()[0]}",
+    ]
+
+    # Read model info from config.yaml if available
+    config_path = Path(__file__).parent / "config.yaml"
+    if config_path.exists():
+        try:
+            import yaml  # noqa: PLC0415
+
+            with open(config_path) as f:
+                cfg = yaml.safe_load(f) or {}
+            model_cfg = cfg.get("model", {})
+            if isinstance(model_cfg, dict):
+                model_id = model_cfg.get("model_id", "")
+                provider = model_cfg.get("provider", "")
+                if model_id:
+                    lines.append(f"- model: {model_id}")
+                if provider:
+                    lines.append(f"- provider: {provider}")
+        except Exception:
+            pass  # Config parsing is best-effort
+
+    # Include CWD for workspace awareness
+    lines.append(f"- cwd: {os.getcwd()}")
+
+    return "\\n".join(lines)
+
+
+def _log_assembly(
+    mode: str,
+    loaded: list[str],
+    missing: list[str],
+    total_chars: int,
+) -> None:
+    """Log which layers were loaded for debugging and audit."""
+    logger.debug(
+        "brief_packet assembled | mode=%s | loaded=%s | missing=%s | total_chars=%d",
+        mode,
+        ",".join(loaded) or "(none)",
+        ",".join(missing) or "(none)",
+        total_chars,
+    )
+
+
 def assemble_brief_packet(mode: str = "full") -> str:
     """Assemble the system prompt from identity layer files.
 
     Args:
-        mode: "full" loads all layers, "minimal" loads RULES + TOOLS only,
+        mode: "full" loads all layers + runtime context,
+              "minimal" loads RULES + TOOLS only (no runtime context),
               "none" returns empty string.
 
     Returns:
         Assembled system prompt string.
     """
     if mode == "none":
+        logger.debug("brief_packet assembled | mode=none | skipped")
         return ""
 
     if mode == "minimal":
@@ -5365,6 +5509,9 @@ def assemble_brief_packet(mode: str = "full") -> str:
         layers = tuple(LAYER_FILES.keys())
 
     sections: list[str] = []
+    loaded: list[str] = []
+    missing: list[str] = []
+
     for layer_name in layers:
         filename = LAYER_FILES.get(layer_name)
         if filename is None:
@@ -5372,8 +5519,204 @@ def assemble_brief_packet(mode: str = "full") -> str:
         content = _read_layer(filename)
         if content:
             sections.append(f"# {layer_name.upper()}\\n\\n{content}")
+            loaded.append(layer_name)
+        else:
+            missing.append(layer_name)
 
-    return "\\n\\n---\\n\\n".join(sections)
+    # Append runtime context in "full" mode only
+    if mode == "full":
+        sections.append(_build_runtime_context())
+
+    result = "\\n\\n---\\n\\n".join(sections)
+
+    _log_assembly(mode, loaded, missing, len(result))
+
+    return result
+'''
+
+    def render_identity_access_py(self) -> str:
+        """Render identity_access.py — access controls, backups, and audit for identity layers."""
+        return '''\
+"""Identity Access — layer-level access control, backup, and versioning (Principle 3).
+
+Provides:
+- Per-layer access control (agent-writable vs admin-only)
+- Timestamped backup before modifications
+- Audit trail for all layer changes
+- Backup listing and restore capability
+
+Access levels can be overridden in config.yaml under identity.access_control.
+"""
+
+from __future__ import annotations
+
+import datetime
+import logging
+import shutil
+from pathlib import Path
+
+logger = logging.getLogger("identity_access")
+
+IDENTITY_DIR = Path(__file__).parent / "identity"
+BACKUPS_DIR = IDENTITY_DIR / ".backups"
+MODIFICATIONS_LOG = IDENTITY_DIR / ".modifications.log"
+
+# Default access levels — agent-writable layers vs admin-only layers.
+# Override via config.yaml identity.access_control section.
+DEFAULT_ACCESS_LEVELS: dict[str, str] = {
+    "RULES.md": "admin",
+    "PERSONALITY.md": "agent",
+    "IDENTITY.md": "admin",
+    "TOOLS.md": "agent",
+    "USER.md": "agent",
+    "MEMORY.md": "agent",
+    "BOOTSTRAP.md": "admin",
+    "DUTIES.md": "admin",
+}
+
+MAX_BACKUPS = 10
+
+
+def _load_access_levels() -> dict[str, str]:
+    """Load access levels from config.yaml, falling back to defaults."""
+    config_path = Path(__file__).parent / "config.yaml"
+    if config_path.exists():
+        try:
+            import yaml  # noqa: PLC0415
+
+            with open(config_path) as f:
+                cfg = yaml.safe_load(f) or {}
+            overrides = cfg.get("identity", {}).get("access_control", {})
+            if isinstance(overrides, dict):
+                merged = dict(DEFAULT_ACCESS_LEVELS)
+                merged.update(overrides)
+                return merged
+        except Exception:
+            pass  # Config parsing is best-effort
+    return dict(DEFAULT_ACCESS_LEVELS)
+
+
+def can_modify(filename: str, caller: str = "agent") -> bool:
+    """Check whether *caller* has permission to modify *filename*.
+
+    Args:
+        filename: Identity layer filename (e.g. ``"PERSONALITY.md"``).
+        caller: ``"agent"`` or ``"admin"``.
+
+    Returns:
+        ``True`` if the caller is allowed to modify the file.
+    """
+    levels = _load_access_levels()
+    required_level = levels.get(filename, "admin")
+    if caller == "admin":
+        return True
+    return required_level == "agent"
+
+
+def modify_layer(
+    filename: str,
+    new_content: str,
+    caller: str = "agent",
+    reason: str = "",
+) -> bool:
+    """Modify an identity layer file with access control, backup, and audit.
+
+    Args:
+        filename: Identity layer filename (e.g. ``"MEMORY.md"``).
+        new_content: Replacement content for the file.
+        caller: ``"agent"`` or ``"admin"``.
+        reason: Human-readable reason for the change (written to audit log).
+
+    Returns:
+        ``True`` if the modification succeeded.
+
+    Raises:
+        PermissionError: If the caller lacks permission.
+        FileNotFoundError: If the identity directory is missing.
+    """
+    if not can_modify(filename, caller):
+        raise PermissionError(
+            f"{caller!r} cannot modify {filename!r} (requires admin access)"
+        )
+
+    file_path = IDENTITY_DIR / filename
+    now = datetime.datetime.now(datetime.timezone.utc)
+    timestamp = now.strftime("%Y%m%dT%H%M%SZ")
+
+    # Create backup if file exists
+    if file_path.exists():
+        BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+        stem = file_path.stem
+        suffix = file_path.suffix
+        backup_name = f"{stem}_{timestamp}{suffix}"
+        backup_path = BACKUPS_DIR / backup_name
+        shutil.copy2(file_path, backup_path)
+        logger.debug("Backed up %s → %s", filename, backup_name)
+
+        # Prune old backups beyond MAX_BACKUPS
+        _prune_backups(filename)
+
+    # Write new content
+    file_path.write_text(new_content)
+
+    # Append to audit log
+    log_line = f"{now.isoformat()} | {caller} | {filename} | {reason}\\n"
+    with open(MODIFICATIONS_LOG, "a") as f:
+        f.write(log_line)
+
+    logger.info("Modified %s by %s: %s", filename, caller, reason or "(no reason)")
+    return True
+
+
+def _prune_backups(filename: str) -> None:
+    """Keep only the most recent MAX_BACKUPS backups for a given layer file."""
+    stem = Path(filename).stem
+    backups = sorted(BACKUPS_DIR.glob(f"{stem}_*"), reverse=True)
+    for old in backups[MAX_BACKUPS:]:
+        old.unlink(missing_ok=True)
+
+
+def list_backups(filename: str) -> list[Path]:
+    """Return available backups for *filename*, newest first.
+
+    Args:
+        filename: Identity layer filename (e.g. ``"RULES.md"``).
+
+    Returns:
+        List of backup file paths sorted by most recent first.
+    """
+    stem = Path(filename).stem
+    if not BACKUPS_DIR.exists():
+        return []
+    return sorted(BACKUPS_DIR.glob(f"{stem}_*"), reverse=True)
+
+
+def restore_backup(filename: str, backup_path: Path) -> bool:
+    """Restore a specific backup version of an identity layer file.
+
+    Args:
+        filename: Identity layer filename to restore.
+        backup_path: Path to the backup file to restore from.
+
+    Returns:
+        ``True`` if the restore succeeded.
+
+    Raises:
+        FileNotFoundError: If the backup file doesn\'t exist.
+    """
+    if not backup_path.exists():
+        raise FileNotFoundError(f"Backup not found: {backup_path}")
+
+    file_path = IDENTITY_DIR / filename
+    shutil.copy2(backup_path, file_path)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    log_line = f"{now.isoformat()} | restore | {filename} | from {backup_path.name}\\n"
+    with open(MODIFICATIONS_LOG, "a") as f:
+        f.write(log_line)
+
+    logger.info("Restored %s from %s", filename, backup_path.name)
+    return True
 '''
 
     def render_identity_rules(self) -> str:
