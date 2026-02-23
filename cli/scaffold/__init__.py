@@ -209,10 +209,14 @@ class ScaffoldGenerator:
             "README.md": template.render_readme(),
             "Makefile": template.render_makefile(),
             ".env.example": template.render_env_example(),
-            "prompts/system_prompt.md": template.render_system_prompt(),
             "tests/__init__.py": "",
             "tests/test_agent.py": template.render_test_agent(),
         }
+
+        # Only generate static system_prompt.md when identity layers are disabled;
+        # when enabled, brief_packet.py assembles the prompt dynamically.
+        if not self.config.identity.enabled:
+            files["prompts/system_prompt.md"] = template.render_system_prompt()
 
         if self.config.sessions.enabled:
             files["sessions.py"] = template.render_sessions_py()
@@ -236,7 +240,9 @@ class ScaffoldGenerator:
 
         if self.config.identity.enabled:
             (output_path / "identity").mkdir(exist_ok=True)
+            (output_path / "identity" / ".backups").mkdir(parents=True, exist_ok=True)
             files["brief_packet.py"] = template.render_brief_packet_py()
+            files["identity_access.py"] = template.render_identity_access_py()
 
             layer_renderers = {
                 "rules": template.render_identity_rules,

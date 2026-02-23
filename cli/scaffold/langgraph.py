@@ -218,6 +218,16 @@ class AgentState(TypedDict, total=False):
 """
 
     def render_section_5_worker(self) -> str:
+        # When identity layers are enabled, load_system_prompt accepts a mode arg.
+        # Sub-agents can pass "minimal" via state["prompt_mode"] to get RULES+TOOLS only.
+        if self.config.identity.enabled:
+            prompt_load = (
+                'prompt_mode = state.get("prompt_mode", "full")\n'
+                "        system_prompt = load_system_prompt(mode=prompt_mode)"
+            )
+        else:
+            prompt_load = "system_prompt = load_system_prompt()"
+
         if self.config.tools.enabled:
             return f"""\
 # =============================================================================
@@ -232,7 +242,7 @@ def worker(state: AgentState) -> dict:
     from langchain_core.messages import HumanMessage, SystemMessage
 
     try:
-        system_prompt = load_system_prompt()
+        {prompt_load}
     except FileNotFoundError as e:
         return {{"error": f"Prompt not found: {{e}}"}}
 
@@ -281,7 +291,7 @@ def worker(state: AgentState) -> dict:
     from langchain_core.messages import HumanMessage, SystemMessage
 
     try:
-        system_prompt = load_system_prompt()
+        {prompt_load}
     except FileNotFoundError as e:
         return {{"error": f"Prompt not found: {{e}}"}}
 

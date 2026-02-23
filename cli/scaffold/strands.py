@@ -238,6 +238,16 @@ def process_query_tool(query: str) -> str:
 """
 
     def render_section_6_graph(self) -> str:
+        # When identity layers are enabled, load_system_prompt accepts a mode arg.
+        # Sub-agents can pass "minimal" via prompt_mode kwarg.
+        if self.config.identity.enabled:
+            prompt_load = (
+                'prompt_mode = kwargs.get("prompt_mode", "full")\n'
+                "    system_prompt = load_system_prompt(mode=prompt_mode)"
+            )
+        else:
+            prompt_load = "system_prompt = load_system_prompt()"
+
         if self.config.tools.enabled:
             return f"""\
 # =============================================================================
@@ -245,11 +255,11 @@ def process_query_tool(query: str) -> str:
 # =============================================================================
 {_principle_comments(6)}
 
-def create_agent():
+def create_agent(**kwargs):
     \"\"\"Create the Strands agent with discovered tools and governance.\"\"\"
     from strands import Agent
 
-    system_prompt = load_system_prompt()
+    {prompt_load}
     model = get_model()
 
     # Tool Governance (Principle 9): discover and filter tools from tools/ directory
@@ -274,12 +284,12 @@ def create_agent():
 # =============================================================================
 {_principle_comments(6)}
 
-def create_agent():
+def create_agent(**kwargs):
     \"\"\"Create the Strands agent with configured model and tools.\"\"\"
     from strands import Agent
     from tool_policy import filter_tools
 
-    system_prompt = load_system_prompt()
+    {prompt_load}
     model = get_model()
 
     # Tool Governance (Principle 9): filter tools through policy

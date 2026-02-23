@@ -486,6 +486,17 @@ def create_agent_config() -> dict[str, Any]:
             langsmith_decorator = f'@traceable(name="{self.config.project_name}")\n'
         session_wrapper = self._render_session_wrapper()
         main_block = self._render_main_block()
+
+        # When identity layers are enabled, load_system_prompt accepts a mode arg.
+        # Sub-agents can pass "minimal" via context["prompt_mode"].
+        if self.config.identity.enabled:
+            prompt_load = (
+                'prompt_mode = (context or {{}}).get("prompt_mode", "full")\n'
+                "        system_prompt = load_system_prompt(mode=prompt_mode)"
+            )
+        else:
+            prompt_load = "system_prompt = load_system_prompt()"
+
         return f"""\
 # =============================================================================
 # 8. ENTRY POINT
@@ -511,7 +522,7 @@ def create_agent_config() -> dict[str, Any]:
     state.context = context or {{}}
 
     try:
-        system_prompt = load_system_prompt()
+        {prompt_load}
         state.response = invoke_model(system_prompt, query)
     except FileNotFoundError as e:
         raise RuntimeError(f"Prompt not found: {{e}}") from e

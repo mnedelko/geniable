@@ -972,8 +972,11 @@ class TestGeneratorIdentityFiles:
         output_path = generator.generate()
 
         assert (output_path / "identity").is_dir()
+        assert (output_path / "identity" / ".backups").is_dir()
         assert (output_path / "brief_packet.py").exists()
-        assert (output_path / "prompts" / "system_prompt.md").exists()
+        assert (output_path / "identity_access.py").exists()
+        # When identity layers are enabled, static system_prompt.md is not generated
+        assert not (output_path / "prompts" / "system_prompt.md").exists()
 
     def test_subset_layers_only_creates_selected(self, tmp_path: Path) -> None:
         config = _make_identity_config(
