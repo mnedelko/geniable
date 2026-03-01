@@ -731,9 +731,7 @@ def clear_state(
         config_manager = ConfigManager()
         config = config_manager.load()
 
-        if not confirm and not typer.confirm(
-            "This will reset all processing history. Continue?"
-        ):
+        if not confirm and not typer.confirm("This will reset all processing history. Continue?"):
             raise typer.Abort()
 
         from agent.state_manager import StateManager
@@ -891,7 +889,6 @@ def login(
         import logging
 
         logging.basicConfig(level=logging.DEBUG, format="%(name)s %(message)s")
-        auth_client.debug = True
         console.print("[dim]Debug mode enabled[/dim]")
 
     # If --reset flag, go directly to password reset flow

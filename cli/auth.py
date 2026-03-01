@@ -67,11 +67,7 @@ class AuthTokens:
             return True
         buffer_seconds = 300  # 5 minutes
         now = datetime.now(UTC)
-        expires = (
-            self.expires_at
-            if self.expires_at.tzinfo
-            else self.expires_at.replace(tzinfo=UTC)
-        )
+        expires = self.expires_at if self.expires_at.tzinfo else self.expires_at.replace(tzinfo=UTC)
         return now > expires - timedelta(seconds=buffer_seconds)
 
     def to_dict(self) -> dict[str, Any]:
@@ -260,7 +256,10 @@ class CognitoAuthClient:
         return self._client
 
     def login(self, username: str, password: str) -> AuthTokens:
-        """Authenticate user with SRP.
+        """Authenticate user with USER_PASSWORD_AUTH flow.
+
+        Uses direct password authentication (over HTTPS). Falls back to
+        SRP if USER_PASSWORD_AUTH is not available on the App Client.
 
         Args:
             username: User's email/username
@@ -272,125 +271,50 @@ class CognitoAuthClient:
         Raises:
             AuthenticationError on authentication failure
         """
-        debug = getattr(self, "debug", False)
         try:
-            # Generate SRP values
-            small_a, large_a = self._generate_random_key_pair()
+            return self._login_password_auth(username, password)
+        except self.client.exceptions.InvalidParameterException:
+            # USER_PASSWORD_AUTH not enabled — fall back to SRP
+            logger.debug("USER_PASSWORD_AUTH not available, falling back to SRP")
+            return self._login_srp(username, password)
 
-            # Initiate auth
-            auth_params = {
-                "USERNAME": username,
-                "SRP_A": self._long_to_hex(large_a),
-            }
-
+    def _login_password_auth(self, username: str, password: str) -> AuthTokens:
+        """Authenticate using USER_PASSWORD_AUTH flow."""
+        try:
             response = self.client.initiate_auth(
-                AuthFlow="USER_SRP_AUTH",
+                AuthFlow="USER_PASSWORD_AUTH",
                 ClientId=self.client_id,
-                AuthParameters=auth_params,
+                AuthParameters={
+                    "USERNAME": username,
+                    "PASSWORD": password,
+                },
             )
 
             challenge_name = response.get("ChallengeName")
 
-            if challenge_name != "PASSWORD_VERIFIER":
-                raise AuthenticationError(f"Unexpected challenge: {challenge_name}")
-
-            # Process challenge
-            challenge = response["ChallengeParameters"]
-            user_id = challenge["USER_ID_FOR_SRP"]
-            salt = challenge["SALT"]
-            srp_b = challenge["SRP_B"]
-            secret_block = challenge["SECRET_BLOCK"]
-
-            if debug:
-                logger.debug("SRP challenge received:")
-                logger.debug(f"  USERNAME sent: {username}")
-                logger.debug(f"  USER_ID_FOR_SRP: {user_id}")
-                logger.debug(f"  SALT: {salt[:16]}...")
-                logger.debug(f"  SRP_B length: {len(srp_b)}")
-                logger.debug(f"  Pool name for hash: {self.user_pool_id.split('_')[1]}")
-                logger.debug(f"  Password length: {len(password)}")
-                logger.debug(f"  Password repr: {repr(password)}")
-
-            # Compute response
-            timestamp = datetime.now(UTC).strftime("%a %b %d %H:%M:%S %Z %Y")
-            claim = self._compute_claim(
-                small_a=small_a,
-                large_a=large_a,
-                username=user_id,
-                password=password,
-                salt=salt,
-                srp_b=srp_b,
-                secret_block=secret_block,
-                timestamp=timestamp,
-            )
-
-            # Respond to challenge
-            challenge_response = {
-                "USERNAME": user_id,
-                "PASSWORD_CLAIM_SECRET_BLOCK": secret_block,
-                "PASSWORD_CLAIM_SIGNATURE": claim,
-                "TIMESTAMP": timestamp,
-            }
-
-            if debug:
-                logger.debug(f"  TIMESTAMP: {timestamp}")
-                logger.debug(f"  Claim signature length: {len(claim)}")
-                logger.debug("Sending respond_to_auth_challenge...")
-
-            auth_result = self.client.respond_to_auth_challenge(
-                ClientId=self.client_id,
-                ChallengeName="PASSWORD_VERIFIER",
-                ChallengeResponses=challenge_response,
-            )
-
-            # Check if password change is required (comes AFTER SRP verification)
-            if auth_result.get("ChallengeName") == "NEW_PASSWORD_REQUIRED":
+            if challenge_name == "NEW_PASSWORD_REQUIRED":
                 raise PasswordChangeRequired(
-                    session=auth_result["Session"],
-                    user_id=auth_result["ChallengeParameters"].get("USER_ID_FOR_SRP", username),
+                    session=response["Session"],
+                    user_id=response["ChallengeParameters"].get("USER_ID_FOR_SRP", username),
                     message="Password change required for new account.",
                 )
 
-            if "AuthenticationResult" not in auth_result:
-                raise AuthenticationError("Authentication failed")
+            if "AuthenticationResult" not in response:
+                raise AuthenticationError(f"Unexpected challenge: {challenge_name}")
 
-            result = auth_result["AuthenticationResult"]
-
-            # Parse tokens with datetime expiry
-            expires_at = datetime.now(UTC) + timedelta(seconds=result["ExpiresIn"])
-            tokens = AuthTokens(
-                access_token=result["AccessToken"],
-                id_token=result["IdToken"],
-                refresh_token=result["RefreshToken"],
-                expires_at=expires_at,
-                user_id=self._extract_user_id(result["IdToken"]),
-                email=username,
-            )
-
-            # Store tokens
-            self._token_storage.store_tokens(tokens)
-
-            return tokens
+            return self._parse_auth_result(response["AuthenticationResult"], username)
 
         except self.client.exceptions.PasswordResetRequiredException as e:
             raise PasswordResetRequired(
                 username=username,
-                message="Admin-initiated password reset. Check your email for a verification code.",
+                message="Password reset required. Use 'geni login --reset' to set a new password.",
             ) from e
         except self.client.exceptions.NotAuthorizedException as e:
-            # Cognito returns NotAuthorizedException for RESET_REQUIRED users
-            # during SRP auth instead of PasswordResetRequiredException.
-            # Check the error message to distinguish from wrong password.
             error_message = str(e)
-            logger.debug(f"NotAuthorizedException detail: {error_message}")
-            if debug:
-                logger.debug(f"Full Cognito error: {error_message}")
-                if hasattr(e, "response"):
-                    logger.debug(f"Response metadata: {e.response}")
             if "password reset" in error_message.lower():
                 raise PasswordResetRequired(
                     username=username,
-                    message="Admin-initiated password reset. Check your email for a verification code.",
+                    message="Password reset required. Use 'geni login --reset' to set a new password.",
                 ) from e
             raise AuthenticationError("Invalid username or password") from e
         except self.client.exceptions.UserNotFoundException as e:
@@ -403,73 +327,98 @@ class CognitoAuthClient:
             logger.error(f"Authentication error: {e}")
             raise AuthenticationError(f"Authentication failed: {e}") from e
 
-    def login_with_password(self, username: str, password: str) -> AuthTokens:
-        """Authenticate using USER_PASSWORD_AUTH flow (non-SRP).
-
-        This sends the password directly over HTTPS instead of using
-        SRP cryptographic proof. Used as a fallback when SRP fails
-        after a password reset (SRP verifier may not be updated correctly).
-
-        Args:
-            username: User's email/username
-            password: User's password
-
-        Returns:
-            AuthTokens on success
-
-        Raises:
-            AuthenticationError on failure
-        """
+    def _login_srp(self, username: str, password: str) -> AuthTokens:
+        """Authenticate using USER_SRP_AUTH flow (fallback)."""
         try:
+            small_a, large_a = self._generate_random_key_pair()
+
             response = self.client.initiate_auth(
-                AuthFlow="USER_PASSWORD_AUTH",
+                AuthFlow="USER_SRP_AUTH",
                 ClientId=self.client_id,
                 AuthParameters={
                     "USERNAME": username,
-                    "PASSWORD": password,
+                    "SRP_A": self._long_to_hex(large_a),
                 },
             )
 
-            # Handle challenges
             challenge_name = response.get("ChallengeName")
-            if challenge_name == "NEW_PASSWORD_REQUIRED":
+            if challenge_name != "PASSWORD_VERIFIER":
+                raise AuthenticationError(f"Unexpected challenge: {challenge_name}")
+
+            challenge = response["ChallengeParameters"]
+            user_id = challenge["USER_ID_FOR_SRP"]
+
+            timestamp = datetime.now(UTC).strftime("%a %b %d %H:%M:%S %Z %Y")
+            claim = self._compute_claim(
+                small_a=small_a,
+                large_a=large_a,
+                username=user_id,
+                password=password,
+                salt=challenge["SALT"],
+                srp_b=challenge["SRP_B"],
+                secret_block=challenge["SECRET_BLOCK"],
+                timestamp=timestamp,
+            )
+
+            auth_result = self.client.respond_to_auth_challenge(
+                ClientId=self.client_id,
+                ChallengeName="PASSWORD_VERIFIER",
+                ChallengeResponses={
+                    "USERNAME": user_id,
+                    "PASSWORD_CLAIM_SECRET_BLOCK": challenge["SECRET_BLOCK"],
+                    "PASSWORD_CLAIM_SIGNATURE": claim,
+                    "TIMESTAMP": timestamp,
+                },
+            )
+
+            if auth_result.get("ChallengeName") == "NEW_PASSWORD_REQUIRED":
                 raise PasswordChangeRequired(
-                    session=response["Session"],
-                    user_id=response["ChallengeParameters"].get("USER_ID_FOR_SRP", username),
+                    session=auth_result["Session"],
+                    user_id=auth_result["ChallengeParameters"].get("USER_ID_FOR_SRP", username),
                     message="Password change required for new account.",
                 )
 
-            if "AuthenticationResult" not in response:
-                raise AuthenticationError(f"Unexpected response: {challenge_name}")
+            if "AuthenticationResult" not in auth_result:
+                raise AuthenticationError("Authentication failed")
 
-            result = response["AuthenticationResult"]
+            return self._parse_auth_result(auth_result["AuthenticationResult"], username)
 
-            expires_at = datetime.now(UTC) + timedelta(seconds=result["ExpiresIn"])
-            tokens = AuthTokens(
-                access_token=result["AccessToken"],
-                id_token=result["IdToken"],
-                refresh_token=result["RefreshToken"],
-                expires_at=expires_at,
-                user_id=self._extract_user_id(result["IdToken"]),
-                email=username,
-            )
-
-            self._token_storage.store_tokens(tokens)
-            return tokens
-
+        except self.client.exceptions.PasswordResetRequiredException as e:
+            raise PasswordResetRequired(
+                username=username,
+                message="Password reset required. Use 'geni login --reset' to set a new password.",
+            ) from e
         except self.client.exceptions.NotAuthorizedException as e:
+            error_message = str(e)
+            if "password reset" in error_message.lower():
+                raise PasswordResetRequired(
+                    username=username,
+                    message="Password reset required. Use 'geni login --reset' to set a new password.",
+                ) from e
             raise AuthenticationError("Invalid username or password") from e
         except self.client.exceptions.UserNotFoundException as e:
             raise AuthenticationError("User not found") from e
-        except (AuthenticationError, PasswordChangeRequired):
+        except self.client.exceptions.UserNotConfirmedException as e:
+            raise AuthenticationError("User account not confirmed") from e
+        except (AuthenticationError, PasswordChangeRequired, PasswordResetRequired):
             raise
-        except self.client.exceptions.InvalidParameterException as e:
-            raise AuthenticationError(
-                "Direct password auth not available for this user pool"
-            ) from e
         except Exception as e:
-            logger.error(f"Password auth error: {e}")
+            logger.error(f"Authentication error: {e}")
             raise AuthenticationError(f"Authentication failed: {e}") from e
+
+    def _parse_auth_result(self, result: dict[str, Any], username: str) -> AuthTokens:
+        """Parse Cognito AuthenticationResult into AuthTokens and store them."""
+        expires_at = datetime.now(UTC) + timedelta(seconds=result["ExpiresIn"])
+        tokens = AuthTokens(
+            access_token=result["AccessToken"],
+            id_token=result["IdToken"],
+            refresh_token=result["RefreshToken"],
+            expires_at=expires_at,
+            user_id=self._extract_user_id(result["IdToken"]),
+            email=username,
+        )
+        self._token_storage.store_tokens(tokens)
+        return tokens
 
     def complete_password_change(
         self, session: str, user_id: str, new_password: str, email: str
