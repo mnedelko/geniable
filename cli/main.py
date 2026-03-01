@@ -785,8 +785,6 @@ def _handle_password_reset(auth_client: object, email: str, getpass: object) -> 
         email: User's email address
         getpass: getpass function for secure password input
     """
-    import time
-
     from cli.auth import AuthenticationError
 
     console.print("\n[cyan]A verification code was sent to your email.[/cyan]")
@@ -824,33 +822,14 @@ def _handle_password_reset(auth_client: object, email: str, getpass: object) -> 
             confirmation_code=verification_code,
             new_password=new_password,
         )
-        print_success("Password reset successfully!")
     except AuthenticationError as reset_error:
         print_error(f"Password reset failed: {reset_error}")
         raise typer.Exit(1) from reset_error
 
-    # Cognito needs a moment to propagate the new password state
-    print_info("Logging in with new password...")
-    time.sleep(2)
-
-    try:
-        tokens = auth_client.login(email, new_password)
-
-        print_success(f"Successfully logged in as {email}")
-
-        if tokens.expires_at:
-            expiry_str = tokens.expires_at.strftime("%Y-%m-%d %H:%M:%S %Z")
-            print_info(f"Session expires: {expiry_str}")
-
-        console.print("\n[bold cyan]Next Steps:[/bold cyan]")
-        console.print("  1. Run 'geni init' to configure your settings")
-        console.print("  2. Your credentials will be stored securely in AWS")
-
-    except Exception:
-        # Cognito state propagation can take a moment after password reset.
-        # The password IS reset — login will work on the next attempt.
-        print_success("Password was reset successfully.")
-        print_info("Please run 'geni login' to sign in with your new password.")
+    print_success("Password has been reset successfully!")
+    console.print("\n[bold cyan]Next Steps:[/bold cyan]")
+    console.print("  1. Run [bold]geni login[/bold] to sign in with your new password")
+    console.print("  2. Run [bold]geni init[/bold] to configure your settings")
 
 
 @app.command()
