@@ -794,12 +794,13 @@ def _handle_password_reset(auth_client: object, email: str, getpass: object) -> 
     try:
         delivery = auth_client.initiate_forgot_password(username=email)
         destination = delivery.get("Destination", "your email")
-        console.print(f"\n[cyan]A new verification code has been sent to {destination}.[/cyan]")
+        console.print(f"\n[cyan]We just sent a verification code to {destination}.[/cyan]")
+        console.print("[cyan]Please check your email and enter the code below.[/cyan]")
     except AuthenticationError as e:
         print_error(f"Could not initiate password reset: {e}")
         raise typer.Exit(1) from e
 
-    console.print("[dim]Requirements: min 12 chars, uppercase, lowercase, numbers[/dim]\n")
+    console.print("[dim]Password requirements: min 12 chars, uppercase, lowercase, numbers[/dim]\n")
 
     # Step 2: Prompt for the fresh verification code
     verification_code = typer.prompt("Verification code from email")
@@ -978,7 +979,7 @@ def login(
         # RESET_REQUIRED state which SRP auth cannot distinguish from
         # a wrong password.
         if typer.confirm(
-            "\nHave you received a password reset code from an administrator?",
+            "\nDo you want to reset your password?",
             default=False,
         ):
             _handle_password_reset(auth_client, email, getpass)
