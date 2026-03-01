@@ -354,6 +354,43 @@ class IntegrationServiceClient:
             logger.error(f"Failed to create ticket: {e}")
             raise
 
+    def transition_ticket(
+        self,
+        provider: str,
+        issue_key: str,
+        target_status: str = "Done",
+    ) -> dict[str, Any]:
+        """Transition a ticket to a target status via the Lambda backend.
+
+        Args:
+            provider: Provider name ('jira' or 'notion')
+            issue_key: Issue identifier (e.g., Jira key)
+            target_status: Target status name
+
+        Returns:
+            Transition response from the backend
+        """
+        try:
+            request_data = {
+                "provider": provider,
+                "issue_key": issue_key,
+                "target_status": target_status,
+            }
+
+            response = self._session.post(
+                f"{self.endpoint}/integrations/ticket/transition",
+                json=request_data,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+
+            result: dict[str, Any] = response.json()
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to transition ticket: {e}")
+            raise
+
     def validate_connection(self) -> bool:
         """Validate connection to the Integration Service.
 

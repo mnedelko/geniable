@@ -441,31 +441,38 @@ def issues_mark_done(
         config_manager = ConfigManager()
         config = config_manager.load()
 
-        if config.provider != "jira":
-            print_error(f"Issues command requires Jira provider (current: {config.provider})")
+        if not config.provider:
+            print_error("Issue provider not configured")
+            print_info("Run 'geni init' to set up configuration")
             raise typer.Exit(1)
 
-        if not config.jira:
-            print_error("Jira configuration not found")
-            raise typer.Exit(1)
+        # Get auth token and route through Lambda backend
+        from agent.api_clients.integration_client import IntegrationServiceClient
+        from cli.auth import get_auth_client
 
-        from cli.jira_client import JiraClient
+        auth_client = get_auth_client()
+        tokens = auth_client.get_current_tokens()
+        auth_token = tokens.id_token if tokens else None
 
-        client = JiraClient(
-            base_url=config.jira.base_url,
-            email=config.jira.email,
-            api_token=config.jira.api_token,
+        client = IntegrationServiceClient(
+            endpoint=config.aws.integration_endpoint,
+            api_key=config.aws.api_key,
+            auth_token=auth_token,
         )
 
         print_info(f"Transitioning {key} to Done...")
 
-        try:
-            client.transition_issue(key, target_status="Done")
-        except ValueError as e:
-            print_error(str(e))
-            raise typer.Exit(1) from e
+        result = client.transition_ticket(
+            provider=config.provider,
+            issue_key=key,
+            target_status="Done",
+        )
 
-        print_success(f"{key} marked as Done")
+        if result.get("success"):
+            print_success(f"{key} marked as Done")
+        else:
+            print_error(result.get("error", "Unknown error"))
+            raise typer.Exit(1)
 
     except FileNotFoundError as e:
         print_error(str(e))

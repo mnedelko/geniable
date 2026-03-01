@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
 import requests
 
 from cli.jira_client import JiraClient, JiraIssue, _extract_text_from_adf
@@ -353,89 +352,3 @@ class TestJiraClient:
         assert 'statusCategory != "Done"' in params["jql"]
         assert params["maxResults"] == 25
 
-    def test_transition_issue_by_name(self) -> None:
-        """Test transition_issue finds transition by name."""
-        # GET transitions
-        mock_get = MagicMock()
-        mock_get.status_code = 200
-        mock_get.json.return_value = {
-            "transitions": [
-                {"id": "31", "name": "Done", "to": {"name": "Done"}},
-                {"id": "21", "name": "In Progress", "to": {"name": "In Progress"}},
-            ]
-        }
-        mock_get.raise_for_status = MagicMock()
-
-        # POST transition
-        mock_post = MagicMock()
-        mock_post.status_code = 204
-        mock_post.raise_for_status = MagicMock()
-
-        self.client.session.get = MagicMock(return_value=mock_get)
-        self.client.session.post = MagicMock(return_value=mock_post)
-
-        self.client.transition_issue("PROJ-1", "Done")
-
-        # Verify POST was called with correct transition ID
-        post_call = self.client.session.post.call_args
-        assert post_call[1]["json"] == {"transition": {"id": "31"}}
-
-    def test_transition_issue_by_to_status(self) -> None:
-        """Test transition_issue finds transition by 'to' status name."""
-        mock_get = MagicMock()
-        mock_get.status_code = 200
-        mock_get.json.return_value = {
-            "transitions": [
-                {"id": "41", "name": "Mark as Complete", "to": {"name": "Done"}},
-            ]
-        }
-        mock_get.raise_for_status = MagicMock()
-
-        mock_post = MagicMock()
-        mock_post.status_code = 204
-        mock_post.raise_for_status = MagicMock()
-
-        self.client.session.get = MagicMock(return_value=mock_get)
-        self.client.session.post = MagicMock(return_value=mock_post)
-
-        self.client.transition_issue("PROJ-1", "Done")
-
-        post_call = self.client.session.post.call_args
-        assert post_call[1]["json"] == {"transition": {"id": "41"}}
-
-    def test_transition_issue_case_insensitive(self) -> None:
-        """Test transition_issue matches case-insensitively."""
-        mock_get = MagicMock()
-        mock_get.status_code = 200
-        mock_get.json.return_value = {
-            "transitions": [
-                {"id": "31", "name": "done", "to": {"name": "done"}},
-            ]
-        }
-        mock_get.raise_for_status = MagicMock()
-
-        mock_post = MagicMock()
-        mock_post.status_code = 204
-        mock_post.raise_for_status = MagicMock()
-
-        self.client.session.get = MagicMock(return_value=mock_get)
-        self.client.session.post = MagicMock(return_value=mock_post)
-
-        self.client.transition_issue("PROJ-1", "Done")
-
-        self.client.session.post.assert_called_once()
-
-    def test_transition_issue_not_found(self) -> None:
-        """Test transition_issue raises ValueError when transition not found."""
-        mock_get = MagicMock()
-        mock_get.status_code = 200
-        mock_get.json.return_value = {
-            "transitions": [
-                {"id": "21", "name": "In Progress", "to": {"name": "In Progress"}},
-            ]
-        }
-        mock_get.raise_for_status = MagicMock()
-        self.client.session.get = MagicMock(return_value=mock_get)
-
-        with pytest.raises(ValueError, match="No 'Done' transition available"):
-            self.client.transition_issue("PROJ-1", "Done")

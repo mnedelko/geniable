@@ -206,56 +206,6 @@ class JiraClient:
         issues = self._parse_issues([data])
         return issues[0]
 
-    def transition_issue(self, issue_key: str, target_status: str = "Done") -> None:
-        """Transition an issue to a target status.
-
-        Finds the available transition matching the target status name
-        and applies it. Jira transitions are workflow-specific, so the
-        exact transition ID must be discovered at runtime.
-
-        Args:
-            issue_key: Issue key (e.g., "AIEV-37")
-            target_status: Target status name to transition to (default: "Done")
-
-        Raises:
-            requests.HTTPError: If the API request fails
-            ValueError: If no matching transition is found
-        """
-        # Get available transitions for this issue
-        url = f"{self.base_url}/rest/api/3/issue/{issue_key}/transitions"
-        response = self.session.get(url, timeout=30)
-        response.raise_for_status()
-
-        transitions = response.json().get("transitions", [])
-
-        # Find the transition matching the target status (case-insensitive)
-        transition_id = None
-        for t in transitions:
-            if t.get("name", "").lower() == target_status.lower():
-                transition_id = t["id"]
-                break
-            # Also check the "to" status name
-            to_status = t.get("to", {}).get("name", "")
-            if to_status.lower() == target_status.lower():
-                transition_id = t["id"]
-                break
-
-        if transition_id is None:
-            available = [t.get("name", "unknown") for t in transitions]
-            raise ValueError(
-                f"No '{target_status}' transition available for {issue_key}. "
-                f"Available transitions: {', '.join(available)}"
-            )
-
-        # Apply the transition
-        payload = {"transition": {"id": transition_id}}
-        response = self.session.post(url, json=payload, timeout=30)
-        response.raise_for_status()
-
-        logger.info(
-            "Transitioned %s to '%s' (transition ID: %s)", issue_key, target_status, transition_id
-        )
-
     def _parse_issues(self, issues_data: list[dict]) -> list[JiraIssue]:
         """Parse raw Jira API issue data into JiraIssue objects.
 

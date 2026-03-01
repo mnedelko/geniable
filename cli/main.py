@@ -1,8 +1,15 @@
 """Main CLI application using Typer."""
 
+from __future__ import annotations
+
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cli.auth import CognitoAuthClient
 
 import typer
 
@@ -774,7 +781,9 @@ def version() -> None:
 # =====================================================================
 
 
-def _handle_password_reset(auth_client: object, email: str, getpass: object) -> None:
+def _handle_password_reset(
+    auth_client: CognitoAuthClient, email: str, getpass: Callable[[str], str]
+) -> None:
     """Handle password reset via the standard ForgotPassword flow.
 
     Initiates a fresh ForgotPassword request (sends a new verification code),

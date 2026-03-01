@@ -518,7 +518,8 @@ class CognitoAuthClient:
                 ClientId=self.client_id,
                 Username=username,
             )
-            return response.get("CodeDeliveryDetails", {})
+            result: dict[str, Any] = response.get("CodeDeliveryDetails", {})
+            return result
         except self.client.exceptions.UserNotFoundException as e:
             raise AuthenticationError("User not found") from e
         except self.client.exceptions.InvalidParameterException as e:
