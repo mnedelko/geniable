@@ -366,6 +366,7 @@ class CognitoAuthClient:
             # during SRP auth instead of PasswordResetRequiredException.
             # Check the error message to distinguish from wrong password.
             error_message = str(e)
+            logger.debug(f"NotAuthorizedException detail: {error_message}")
             if "password reset" in error_message.lower():
                 raise PasswordResetRequired(
                     username=username,
@@ -380,6 +381,74 @@ class CognitoAuthClient:
             raise
         except Exception as e:
             logger.error(f"Authentication error: {e}")
+            raise AuthenticationError(f"Authentication failed: {e}") from e
+
+    def login_with_password(self, username: str, password: str) -> AuthTokens:
+        """Authenticate using USER_PASSWORD_AUTH flow (non-SRP).
+
+        This sends the password directly over HTTPS instead of using
+        SRP cryptographic proof. Used as a fallback when SRP fails
+        after a password reset (SRP verifier may not be updated correctly).
+
+        Args:
+            username: User's email/username
+            password: User's password
+
+        Returns:
+            AuthTokens on success
+
+        Raises:
+            AuthenticationError on failure
+        """
+        try:
+            response = self.client.initiate_auth(
+                AuthFlow="USER_PASSWORD_AUTH",
+                ClientId=self.client_id,
+                AuthParameters={
+                    "USERNAME": username,
+                    "PASSWORD": password,
+                },
+            )
+
+            # Handle challenges
+            challenge_name = response.get("ChallengeName")
+            if challenge_name == "NEW_PASSWORD_REQUIRED":
+                raise PasswordChangeRequired(
+                    session=response["Session"],
+                    user_id=response["ChallengeParameters"].get("USER_ID_FOR_SRP", username),
+                    message="Password change required for new account.",
+                )
+
+            if "AuthenticationResult" not in response:
+                raise AuthenticationError(f"Unexpected response: {challenge_name}")
+
+            result = response["AuthenticationResult"]
+
+            expires_at = datetime.now(UTC) + timedelta(seconds=result["ExpiresIn"])
+            tokens = AuthTokens(
+                access_token=result["AccessToken"],
+                id_token=result["IdToken"],
+                refresh_token=result["RefreshToken"],
+                expires_at=expires_at,
+                user_id=self._extract_user_id(result["IdToken"]),
+                email=username,
+            )
+
+            self._token_storage.store_tokens(tokens)
+            return tokens
+
+        except self.client.exceptions.NotAuthorizedException as e:
+            raise AuthenticationError("Invalid username or password") from e
+        except self.client.exceptions.UserNotFoundException as e:
+            raise AuthenticationError("User not found") from e
+        except (AuthenticationError, PasswordChangeRequired):
+            raise
+        except self.client.exceptions.InvalidParameterException as e:
+            raise AuthenticationError(
+                "Direct password auth not available for this user pool"
+            ) from e
+        except Exception as e:
+            logger.error(f"Password auth error: {e}")
             raise AuthenticationError(f"Authentication failed: {e}") from e
 
     def complete_password_change(
