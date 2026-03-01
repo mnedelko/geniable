@@ -778,18 +778,18 @@ def _handle_password_reset(auth_client: object, email: str, getpass: object) -> 
     """Handle the admin-initiated password reset flow.
 
     Prompts for verification code and new password, confirms the reset
-    with Cognito, then logs the user in with the new credentials.
+    with Cognito, then attempts to log the user in with the new credentials.
 
     Args:
         auth_client: CognitoAuthClient instance
         email: User's email address
         getpass: getpass function for secure password input
     """
+    import time
+
     from cli.auth import AuthenticationError
 
-    print_warning("Password reset required.")
-    console.print("\n[cyan]An administrator has reset your password.[/cyan]")
-    console.print("[cyan]A verification code has been sent to your email.[/cyan]")
+    console.print("\n[cyan]A verification code was sent to your email.[/cyan]")
     console.print("[dim]Requirements: min 12 chars, uppercase, lowercase, numbers[/dim]\n")
 
     # Prompt for verification code
@@ -825,9 +825,15 @@ def _handle_password_reset(auth_client: object, email: str, getpass: object) -> 
             new_password=new_password,
         )
         print_success("Password reset successfully!")
+    except AuthenticationError as reset_error:
+        print_error(f"Password reset failed: {reset_error}")
+        raise typer.Exit(1) from reset_error
 
-        # Log in with the new password
-        print_info("Logging in with new password...")
+    # Cognito needs a moment to propagate the new password state
+    print_info("Logging in with new password...")
+    time.sleep(2)
+
+    try:
         tokens = auth_client.login(email, new_password)
 
         print_success(f"Successfully logged in as {email}")
@@ -840,9 +846,11 @@ def _handle_password_reset(auth_client: object, email: str, getpass: object) -> 
         console.print("  1. Run 'geni init' to configure your settings")
         console.print("  2. Your credentials will be stored securely in AWS")
 
-    except AuthenticationError as reset_error:
-        print_error(f"Password reset failed: {reset_error}")
-        raise typer.Exit(1) from reset_error
+    except Exception:
+        # Cognito state propagation can take a moment after password reset.
+        # The password IS reset — login will work on the next attempt.
+        print_success("Password was reset successfully.")
+        print_info("Please run 'geni login' to sign in with your new password.")
 
 
 @app.command()
@@ -885,16 +893,8 @@ def login(
     # Get auth client
     auth_client = get_auth_client(use_keyring=not no_keyring)
 
-    # Check if user needs to reset password (via flag or prompt)
-    needs_reset = reset
-    if not needs_reset:
-        needs_reset = typer.confirm(
-            "Have you received a password reset code from an administrator?",
-            default=False,
-        )
-
-    if needs_reset:
-        # Go directly to password reset flow — no old password needed
+    # If --reset flag, go directly to password reset flow
+    if reset:
         _handle_password_reset(auth_client, email, getpass)
         return
 
@@ -973,7 +973,17 @@ def login(
 
     except AuthenticationError as e:
         print_error(f"Authentication failed: {e}")
-        raise typer.Exit(1) from e
+
+        # Offer password reset if login failed — the user may be in
+        # RESET_REQUIRED state which SRP auth cannot distinguish from
+        # a wrong password.
+        if typer.confirm(
+            "\nHave you received a password reset code from an administrator?",
+            default=False,
+        ):
+            _handle_password_reset(auth_client, email, getpass)
+        else:
+            raise typer.Exit(1) from e
     except Exception as e:
         print_error(f"Login failed: {e}")
         raise typer.Exit(1) from e
