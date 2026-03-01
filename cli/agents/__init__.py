@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 # Agents included in this package
 AGENTS = [
     "Geni Analyzer.md",
+    "Issue Resolver.md",
 ]
 
 

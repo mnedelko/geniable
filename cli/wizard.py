@@ -146,6 +146,7 @@ class ConfigWizard:
             "Bash(geni analyze mark-done:*)",  # geni analyze mark-done
             "Bash(geni ticket:*)",             # geni ticket subcommands
             "Bash(geni ticket create:*)",      # geni ticket create
+            "Bash(geni issues:*)",             # geni issues subcommands
         ]
 
         try:

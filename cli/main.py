@@ -7,6 +7,7 @@ from pathlib import Path
 import typer
 
 from cli.commands.analyze import app as analyze_app
+from cli.commands.issues import app as issues_app
 from cli.commands.scaffold import app as scaffold_app
 from cli.commands.ticket import app as ticket_app
 from cli.config_manager import DEFAULT_CONFIG_PATH, ConfigManager
@@ -78,6 +79,7 @@ app = typer.Typer(
 # Add subcommands
 app.add_typer(analyze_app, name="analyze", help="Thread analysis commands")
 app.add_typer(ticket_app, name="ticket", help="Ticket management commands")
+app.add_typer(issues_app, name="issues", help="Jira issue management")
 app.add_typer(scaffold_app, name="new", help="Generate agent project scaffolds")
 
 
@@ -843,6 +845,33 @@ def _handle_password_reset(auth_client: object, email: str, getpass: object) -> 
     console.print("  2. Run [bold]geni init[/bold] to configure your settings")
 
 
+def _ensure_skills_installed() -> None:
+    """Ensure Geniable agents and skills are installed (non-force).
+
+    Called after successful login to make sure the Issue Resolver
+    and other agents are available. Does not overwrite existing files.
+    """
+    try:
+        from cli.agents import install_agents
+
+        project_root = Path.cwd()
+        target_dir = project_root / ".claude" / "agents"
+
+        # Only install if the target directory's parent (.claude) exists
+        # This indicates the project has been initialized
+        if (project_root / ".claude").exists():
+            results = install_agents(target_dir=target_dir, force=False, project_root=project_root)
+            installed = [name for name, success in results.items() if success]
+            if installed:
+                # Check if any were actually newly created (vs already existing)
+                for name in installed:
+                    if not (target_dir / name).exists():
+                        console.print(f"[dim]Installed agent: {name}[/dim]")
+    except Exception:
+        # Non-critical — don't fail login over agent installation
+        pass
+
+
 @app.command()
 def login(
     email: str | None = typer.Option(None, "--email", "-e", help="Email address"),
@@ -910,6 +939,9 @@ def login(
 
         print_success(f"Successfully logged in as {email}")
 
+        # Auto-install agents if project is initialized
+        _ensure_skills_installed()
+
         # Show token expiry
         if tokens.expires_at:
             expiry_str = tokens.expires_at.strftime("%Y-%m-%d %H:%M:%S %Z")
@@ -955,6 +987,9 @@ def login(
 
             print_success("Password changed successfully!")
             print_success(f"Logged in as {email}")
+
+            # Auto-install agents if project is initialized
+            _ensure_skills_installed()
 
             # Show next steps
             console.print("\n[bold cyan]Next Steps:[/bold cyan]")
@@ -1104,6 +1139,17 @@ def analyze_latest_alias(
     from cli.commands.analyze import analyze_latest
 
     analyze_latest(limit=limit, dry_run=dry_run, verbose=verbose, ci=ci)
+
+
+@app.command("issues-list")
+def issues_list_alias(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    limit: int = typer.Option(50, "--limit", "-l", help="Maximum issues to fetch"),
+) -> None:
+    """List open Jira issues (alias for 'issues list')."""
+    from cli.commands.issues import issues_list
+
+    issues_list(verbose=verbose, limit=limit)
 
 
 @app.command("analyze-specific")
