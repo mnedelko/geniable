@@ -128,6 +128,15 @@ After implementation:
 - Summarize all changes made
 - Ask the user if they'd like any adjustments
 
+### 8. Close Issue
+Once everything looks good and the user is satisfied, ask:
+> "Would you like me to mark {issue.key} as Done in Jira?"
+
+If the user says yes, run this command:
+```bash
+geni issues mark-done {issue.key}
+```
+
 Begin by presenting the issue details and asking the user how they'd like to approach it."""
 
 
@@ -409,6 +418,66 @@ def issues_resolve(
         raise
     except Exception as e:
         print_error(f"Failed to resolve issue: {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(1) from e
+
+
+@app.command("mark-done")
+def issues_mark_done(
+    key: str = typer.Argument(..., help="Jira issue key (e.g., AIEV-37)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+) -> None:
+    """Mark a Jira issue as Done.
+
+    Transitions the issue to the Done status in Jira.
+
+    Example:
+        geni issues mark-done AIEV-37
+    """
+    _require_auth()
+
+    try:
+        config_manager = ConfigManager()
+        config = config_manager.load()
+
+        if config.provider != "jira":
+            print_error(f"Issues command requires Jira provider (current: {config.provider})")
+            raise typer.Exit(1)
+
+        if not config.jira:
+            print_error("Jira configuration not found")
+            raise typer.Exit(1)
+
+        from cli.jira_client import JiraClient
+
+        client = JiraClient(
+            base_url=config.jira.base_url,
+            email=config.jira.email,
+            api_token=config.jira.api_token,
+        )
+
+        print_info(f"Transitioning {key} to Done...")
+
+        try:
+            client.transition_issue(key, target_status="Done")
+        except ValueError as e:
+            print_error(str(e))
+            raise typer.Exit(1) from e
+
+        print_success(f"{key} marked as Done")
+
+    except FileNotFoundError as e:
+        print_error(str(e))
+        print_info("Run 'geni init' to set up configuration")
+        raise typer.Exit(1) from e
+    except KeyboardInterrupt:
+        print_warning("\nCancelled")
+        raise typer.Exit(0) from None
+    except typer.Exit:
+        raise
+    except Exception as e:
+        print_error(f"Failed to mark issue as done: {e}")
         if verbose:
             console.print_exception()
         raise typer.Exit(1) from e

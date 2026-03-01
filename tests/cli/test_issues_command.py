@@ -100,6 +100,17 @@ class TestBuildResolvePrompt:
         assert "Confirm" in prompt
         assert "Execute" in prompt
         assert "Verify" in prompt
+        assert "Close Issue" in prompt
+
+    def test_contains_mark_done_command(self) -> None:
+        issue = _make_issue(key="AIEV-42")
+        prompt = _build_resolve_prompt(issue)
+        assert "geni issues mark-done AIEV-42" in prompt
+
+    def test_mark_done_step_asks_user(self) -> None:
+        issue = _make_issue()
+        prompt = _build_resolve_prompt(issue)
+        assert "mark" in prompt.lower() and "Done" in prompt
 
 
 # ---------------------------------------------------------------------------

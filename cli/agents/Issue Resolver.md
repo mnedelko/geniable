@@ -115,7 +115,21 @@ After implementation:
    > - **[file]**: [what changed]
    > - **[file]**: [what changed]"
 
-4. Ask: "Would you like any adjustments, or shall we consider this resolved?"
+4. Ask: "Would you like any adjustments?"
+
+## Step 8: Close Issue
+
+Once the user is satisfied with the changes and tests are passing, ask:
+> "Would you like me to mark this issue as Done in Jira?"
+
+If the user says yes, run:
+```bash
+geni issues mark-done <ISSUE-KEY>
+```
+
+Replace `<ISSUE-KEY>` with the actual issue key (e.g., `AIEV-37`).
+
+If the transition succeeds, confirm to the user. If it fails (e.g., workflow doesn't allow direct transition to Done), inform the user and suggest they update the status manually in Jira.
 
 ---
 
