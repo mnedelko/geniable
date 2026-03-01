@@ -6,6 +6,9 @@ from pathlib import Path
 
 import typer
 
+from cli.commands.analyze import app as analyze_app
+from cli.commands.scaffold import app as scaffold_app
+from cli.commands.ticket import app as ticket_app
 from cli.config_manager import DEFAULT_CONFIG_PATH, ConfigManager
 from cli.output_formatter import (
     console,
@@ -39,12 +42,12 @@ def require_auth() -> None:
     except (ImportError, ValueError) as e:
         print_error(f"Authentication module not configured: {e}")
         print_info("Ensure AWS Cognito is configured properly")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except typer.Exit:
         raise
     except Exception as e:
         print_error(f"Authentication check failed: {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 def _get_auth_token() -> str | None:
@@ -72,19 +75,9 @@ app = typer.Typer(
     add_completion=False,
 )
 
-# Add analyze subcommands
-from cli.commands.analyze import app as analyze_app
-
+# Add subcommands
 app.add_typer(analyze_app, name="analyze", help="Thread analysis commands")
-
-# Add ticket subcommands
-from cli.commands.ticket import app as ticket_app
-
 app.add_typer(ticket_app, name="ticket", help="Ticket management commands")
-
-# Add scaffold subcommands
-from cli.commands.scaffold import app as scaffold_app
-
 app.add_typer(scaffold_app, name="new", help="Generate agent project scaffolds")
 
 
@@ -132,7 +125,7 @@ def init(
         print_info("Verifying saved configuration...")
         try:
             config_manager = ConfigManager()
-            loaded_config = config_manager.load()
+            config_manager.load()
             print_success("Configuration validated successfully")
         except Exception as e:
             print_error(f"Configuration validation failed: {e}")
@@ -167,14 +160,14 @@ def init(
 
     except KeyboardInterrupt:
         print_warning("\nWizard cancelled")
-        raise typer.Abort()
+        raise typer.Abort() from None
     except RuntimeError as e:
         # RuntimeError from secrets sync failure
         print_error(f"Setup failed: {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except Exception as e:
         print_error(f"Setup failed: {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command()
@@ -231,13 +224,13 @@ def inject(
 
     except FileExistsError as e:
         print_error(str(e))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except FileNotFoundError as e:
         print_error(str(e))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except Exception as e:
         print_error(f"Injection failed: {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command()
@@ -259,9 +252,10 @@ def configure(
     config_manager = ConfigManager()
 
     if reset:
-        if DEFAULT_CONFIG_PATH.exists():
-            if not typer.confirm("This will overwrite existing config. Continue?"):
-                raise typer.Abort()
+        if DEFAULT_CONFIG_PATH.exists() and not typer.confirm(
+            "This will overwrite existing config. Continue?"
+        ):
+            raise typer.Abort()
 
         path = ConfigManager.create_template()
         print_success(f"Configuration template created: {path}")
@@ -282,7 +276,7 @@ def configure(
             print_config(config.model_dump())
         except Exception as e:
             print_error(f"Failed to load config: {e}")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
         return
 
     if list_secrets:
@@ -309,13 +303,15 @@ def configure(
                     if secret.get("last_changed"):
                         console.print(f"    [dim]Last modified: {secret['last_changed']}[/dim]")
 
-        except ImportError:
+        except ImportError as e:
             print_error("boto3 is required for AWS Secrets Manager")
             print_info("Install with: pip install boto3")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
+        except typer.Exit:
+            raise
         except Exception as e:
             print_error(f"Failed to list secrets: {e}")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
         return
 
     if sync_secrets:
@@ -362,15 +358,15 @@ def configure(
                 print_warning("\nSome credentials failed to sync")
                 raise typer.Exit(1)
 
-        except ImportError:
+        except ImportError as e:
             print_error("boto3 is required for AWS Secrets Manager")
             print_info("Install with: pip install boto3")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
         except typer.Exit:
             raise
         except Exception as e:
             print_error(f"Failed to sync secrets: {e}")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
         return
 
     if validate:
@@ -379,7 +375,7 @@ def configure(
             config = config_manager.load()
 
             # Validate provider config
-            provider_config = config.get_provider_config()
+            config.get_provider_config()
             print_success(f"Configuration valid for provider: {config.provider}")
 
             # Show summary
@@ -442,7 +438,7 @@ def configure(
             raise
         except Exception as e:
             print_error(f"Configuration invalid: {e}")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
         return
 
     # Default: show help
@@ -564,13 +560,13 @@ def run(
 
     except FileNotFoundError as e:
         print_error(str(e))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     except Exception as e:
         print_error(f"Analysis failed: {e}")
         if verbose:
             console.print_exception()
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command()
@@ -629,11 +625,11 @@ def status(
 
     except FileNotFoundError as e:
         print_error(str(e))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     except Exception as e:
         print_error(f"Status check failed: {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command()
@@ -671,7 +667,7 @@ def discover() -> None:
 
     except Exception as e:
         print_error(f"Discovery failed: {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command()
@@ -716,11 +712,11 @@ def stats() -> None:
 
     except FileNotFoundError as e:
         print_error(str(e))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     except Exception as e:
         print_error(f"Failed to get stats: {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command()
@@ -735,9 +731,10 @@ def clear_state(
         config_manager = ConfigManager()
         config = config_manager.load()
 
-        if not confirm:
-            if not typer.confirm("This will reset all processing history. Continue?"):
-                raise typer.Abort()
+        if not confirm and not typer.confirm(
+            "This will reset all processing history. Continue?"
+        ):
+            raise typer.Abort()
 
         from agent.state_manager import StateManager
 
@@ -751,11 +748,11 @@ def clear_state(
 
     except FileNotFoundError as e:
         print_error(str(e))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     except Exception as e:
         print_error(f"Failed to clear state: {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command()
@@ -793,11 +790,16 @@ def login(
     from getpass import getpass
 
     try:
-        from cli.auth import AuthenticationError, PasswordChangeRequired, get_auth_client
+        from cli.auth import (
+            AuthenticationError,
+            PasswordChangeRequired,
+            PasswordResetRequired,
+            get_auth_client,
+        )
     except ImportError as e:
         print_error(f"Authentication module not available: {e}")
         print_info("Ensure all dependencies are installed: pip install -e '.[dev]'")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     # Get email if not provided
     if not email:
@@ -873,14 +875,79 @@ def login(
 
         except AuthenticationError as pw_error:
             print_error(f"Password change failed: {pw_error}")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from pw_error
+
+    except PasswordResetRequired as e:
+        # Handle admin-initiated password reset
+        print_warning("Password reset required.")
+        console.print(
+            "\n[cyan]An administrator has reset your password.[/cyan]"
+        )
+        console.print(
+            "[cyan]A verification code has been sent to your email.[/cyan]"
+        )
+        console.print(
+            "[dim]Requirements: min 12 chars, uppercase, lowercase, numbers[/dim]\n"
+        )
+
+        # Prompt for verification code
+        verification_code = typer.prompt("Verification code from email")
+        if not verification_code or not verification_code.strip():
+            print_error("Verification code is required")
+            raise typer.Exit(1) from None
+        verification_code = verification_code.strip()
+
+        # Prompt for new password with confirmation
+        while True:
+            new_password = getpass("New password: ")
+            if not new_password:
+                print_error("Password is required")
+                continue
+
+            if len(new_password) < 12:
+                print_error("Password must be at least 12 characters")
+                continue
+
+            confirm_password = getpass("Confirm new password: ")
+            if new_password != confirm_password:
+                print_error("Passwords do not match")
+                continue
+
+            break
+
+        try:
+            print_info("Resetting password...")
+            auth_client.confirm_password_reset(
+                username=e.username,
+                confirmation_code=verification_code,
+                new_password=new_password,
+            )
+            print_success("Password reset successfully!")
+
+            # Log in with the new password
+            print_info("Logging in with new password...")
+            tokens = auth_client.login(e.username, new_password)
+
+            print_success(f"Successfully logged in as {email}")
+
+            if tokens.expires_at:
+                expiry_str = tokens.expires_at.strftime("%Y-%m-%d %H:%M:%S %Z")
+                print_info(f"Session expires: {expiry_str}")
+
+            console.print("\n[bold cyan]Next Steps:[/bold cyan]")
+            console.print("  1. Run 'geni init' to configure your settings")
+            console.print("  2. Your credentials will be stored securely in AWS")
+
+        except AuthenticationError as reset_error:
+            print_error(f"Password reset failed: {reset_error}")
+            raise typer.Exit(1) from reset_error
 
     except AuthenticationError as e:
         print_error(f"Authentication failed: {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except Exception as e:
         print_error(f"Login failed: {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command()
@@ -893,7 +960,7 @@ def logout() -> None:
         from cli.auth import get_auth_client
     except ImportError as e:
         print_error(f"Authentication module not available: {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     try:
         auth_client = get_auth_client()
@@ -907,7 +974,7 @@ def logout() -> None:
 
     except Exception as e:
         print_error(f"Logout failed: {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command()
@@ -921,7 +988,7 @@ def whoami() -> None:
         from cli.auth import get_auth_client
     except ImportError as e:
         print_error(f"Authentication module not available: {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     try:
         auth_client = get_auth_client()
@@ -981,7 +1048,7 @@ def whoami() -> None:
         raise
     except Exception as e:
         print_error(f"Failed to get authentication status: {e}")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 # Top-level aliases for analyze commands (convenience)

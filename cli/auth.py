@@ -38,6 +38,18 @@ class PasswordChangeRequired(Exception):
         super().__init__(message)
 
 
+class PasswordResetRequired(Exception):
+    """Raised when an admin has reset the user's password.
+
+    The user must provide the verification code sent to their email
+    and set a new password via confirm_forgot_password.
+    """
+
+    def __init__(self, username: str, message: str = "Password reset required"):
+        self.username = username
+        super().__init__(message)
+
+
 @dataclass
 class AuthTokens:
     """Container for Cognito tokens."""
@@ -344,13 +356,18 @@ class CognitoAuthClient:
 
             return tokens
 
+        except self.client.exceptions.PasswordResetRequiredException as e:
+            raise PasswordResetRequired(
+                username=username,
+                message="Admin-initiated password reset. Check your email for a verification code.",
+            ) from e
         except self.client.exceptions.NotAuthorizedException as e:
             raise AuthenticationError("Invalid username or password") from e
         except self.client.exceptions.UserNotFoundException as e:
             raise AuthenticationError("User not found") from e
         except self.client.exceptions.UserNotConfirmedException as e:
             raise AuthenticationError("User account not confirmed") from e
-        except (AuthenticationError, PasswordChangeRequired):
+        except (AuthenticationError, PasswordChangeRequired, PasswordResetRequired):
             raise
         except Exception as e:
             logger.error(f"Authentication error: {e}")
@@ -415,6 +432,47 @@ class CognitoAuthClient:
         except Exception as e:
             logger.error(f"Password change error: {e}")
             raise AuthenticationError(f"Password change failed: {e}") from e
+
+    def confirm_password_reset(
+        self, username: str, confirmation_code: str, new_password: str
+    ) -> None:
+        """Confirm an admin-initiated password reset.
+
+        After an admin calls AdminResetUserPassword, the user receives a
+        verification code via email. This method completes the reset by
+        submitting the code and the new password to Cognito.
+
+        Args:
+            username: User's email/username
+            confirmation_code: Verification code from email
+            new_password: New password to set
+
+        Raises:
+            AuthenticationError on failure
+        """
+        try:
+            self.client.confirm_forgot_password(
+                ClientId=self.client_id,
+                Username=username,
+                ConfirmationCode=confirmation_code,
+                Password=new_password,
+            )
+        except self.client.exceptions.CodeMismatchException as e:
+            raise AuthenticationError(
+                "Invalid verification code. Please check the code from your email."
+            ) from e
+        except self.client.exceptions.ExpiredCodeException as e:
+            raise AuthenticationError(
+                "Verification code has expired. Please request a new password reset."
+            ) from e
+        except self.client.exceptions.InvalidPasswordException as e:
+            raise AuthenticationError(
+                "Invalid password. Password must be at least 12 characters "
+                "and include uppercase, lowercase, and numbers."
+            ) from e
+        except Exception as e:
+            logger.error(f"Password reset confirmation error: {e}")
+            raise AuthenticationError(f"Password reset failed: {e}") from e
 
     def refresh(self, refresh_token: str) -> AuthTokens:
         """Refresh access tokens.

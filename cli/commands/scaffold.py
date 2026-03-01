@@ -105,6 +105,11 @@ API_KEY_PROVIDERS = {
 # Identity layer choices (Principle 3: Separation of Identity Concerns)
 IDENTITY_LAYERS = [
     questionary.Choice(
+        title="Single System Prompt only — skip identity layers",
+        value="_single_prompt",
+        checked=False,
+    ),
+    questionary.Choice(
         title="Operational Rules  — core instructions and constraints",
         value="rules",
         checked=True,
@@ -302,6 +307,23 @@ def _ask_identity_layers() -> IdentityLayerConfig:
 
     if layers is None:
         raise typer.Abort()
+
+    while not layers:
+        console.print("[red]Please select at least one option.[/red]")
+        layers = questionary.checkbox(
+            "Select identity layers:",
+            choices=IDENTITY_LAYERS,
+        ).ask()
+        if layers is None:
+            raise typer.Abort()
+
+    # "Single System Prompt only" — skip identity layers entirely
+    if "_single_prompt" in layers:
+        # If real layers were also selected, they take precedence
+        real_layers = [layer for layer in layers if layer != "_single_prompt"]
+        if not real_layers:
+            return IdentityLayerConfig(enabled=False)
+        layers = real_layers
 
     personality_preset = "professional"
     if "personality" in layers:
