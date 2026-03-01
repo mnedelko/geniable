@@ -362,6 +362,15 @@ class CognitoAuthClient:
                 message="Admin-initiated password reset. Check your email for a verification code.",
             ) from e
         except self.client.exceptions.NotAuthorizedException as e:
+            # Cognito returns NotAuthorizedException for RESET_REQUIRED users
+            # during SRP auth instead of PasswordResetRequiredException.
+            # Check the error message to distinguish from wrong password.
+            error_message = str(e)
+            if "password reset" in error_message.lower():
+                raise PasswordResetRequired(
+                    username=username,
+                    message="Admin-initiated password reset. Check your email for a verification code.",
+                ) from e
             raise AuthenticationError("Invalid username or password") from e
         except self.client.exceptions.UserNotFoundException as e:
             raise AuthenticationError("User not found") from e

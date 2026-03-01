@@ -774,11 +774,85 @@ def version() -> None:
 # =====================================================================
 
 
+def _handle_password_reset(auth_client: object, email: str, getpass: object) -> None:
+    """Handle the admin-initiated password reset flow.
+
+    Prompts for verification code and new password, confirms the reset
+    with Cognito, then logs the user in with the new credentials.
+
+    Args:
+        auth_client: CognitoAuthClient instance
+        email: User's email address
+        getpass: getpass function for secure password input
+    """
+    from cli.auth import AuthenticationError
+
+    print_warning("Password reset required.")
+    console.print("\n[cyan]An administrator has reset your password.[/cyan]")
+    console.print("[cyan]A verification code has been sent to your email.[/cyan]")
+    console.print("[dim]Requirements: min 12 chars, uppercase, lowercase, numbers[/dim]\n")
+
+    # Prompt for verification code
+    verification_code = typer.prompt("Verification code from email")
+    if not verification_code or not verification_code.strip():
+        print_error("Verification code is required")
+        raise typer.Exit(1)
+    verification_code = verification_code.strip()
+
+    # Prompt for new password with confirmation
+    while True:
+        new_password = getpass("New password: ")
+        if not new_password:
+            print_error("Password is required")
+            continue
+
+        if len(new_password) < 12:
+            print_error("Password must be at least 12 characters")
+            continue
+
+        confirm_password = getpass("Confirm new password: ")
+        if new_password != confirm_password:
+            print_error("Passwords do not match")
+            continue
+
+        break
+
+    try:
+        print_info("Resetting password...")
+        auth_client.confirm_password_reset(
+            username=email,
+            confirmation_code=verification_code,
+            new_password=new_password,
+        )
+        print_success("Password reset successfully!")
+
+        # Log in with the new password
+        print_info("Logging in with new password...")
+        tokens = auth_client.login(email, new_password)
+
+        print_success(f"Successfully logged in as {email}")
+
+        if tokens.expires_at:
+            expiry_str = tokens.expires_at.strftime("%Y-%m-%d %H:%M:%S %Z")
+            print_info(f"Session expires: {expiry_str}")
+
+        console.print("\n[bold cyan]Next Steps:[/bold cyan]")
+        console.print("  1. Run 'geni init' to configure your settings")
+        console.print("  2. Your credentials will be stored securely in AWS")
+
+    except AuthenticationError as reset_error:
+        print_error(f"Password reset failed: {reset_error}")
+        raise typer.Exit(1) from reset_error
+
+
 @app.command()
 def login(
     email: str | None = typer.Option(None, "--email", "-e", help="Email address"),
     no_keyring: bool = typer.Option(
         False, "--no-keyring", help="Use file storage instead of system keyring"
+    ),
+    reset: bool = typer.Option(
+        False, "--reset", help="Reset password using a verification code from email"
     ),
 ) -> None:
     """Login to Geni cloud service.
@@ -786,6 +860,9 @@ def login(
     Authenticates with AWS Cognito and stores tokens securely in the
     system keyring (macOS Keychain, Windows Credential Store) or
     encrypted file if --no-keyring is specified.
+
+    If an administrator has reset your password, use --reset or answer
+    'y' when prompted to enter your verification code and set a new password.
     """
     from getpass import getpass
 
@@ -805,7 +882,23 @@ def login(
     if not email:
         email = typer.prompt("Email")
 
-    # Get password securely
+    # Get auth client
+    auth_client = get_auth_client(use_keyring=not no_keyring)
+
+    # Check if user needs to reset password (via flag or prompt)
+    needs_reset = reset
+    if not needs_reset:
+        needs_reset = typer.confirm(
+            "Have you received a password reset code from an administrator?",
+            default=False,
+        )
+
+    if needs_reset:
+        # Go directly to password reset flow — no old password needed
+        _handle_password_reset(auth_client, email, getpass)
+        return
+
+    # Normal login flow
     password = getpass("Password: ")
 
     if not password:
@@ -813,9 +906,6 @@ def login(
         raise typer.Exit(1)
 
     try:
-        # Get auth client
-        auth_client = get_auth_client(use_keyring=not no_keyring)
-
         # Attempt login
         print_info("Authenticating...")
         tokens = auth_client.login(email, password)
@@ -877,70 +967,9 @@ def login(
             print_error(f"Password change failed: {pw_error}")
             raise typer.Exit(1) from pw_error
 
-    except PasswordResetRequired as e:
-        # Handle admin-initiated password reset
-        print_warning("Password reset required.")
-        console.print(
-            "\n[cyan]An administrator has reset your password.[/cyan]"
-        )
-        console.print(
-            "[cyan]A verification code has been sent to your email.[/cyan]"
-        )
-        console.print(
-            "[dim]Requirements: min 12 chars, uppercase, lowercase, numbers[/dim]\n"
-        )
-
-        # Prompt for verification code
-        verification_code = typer.prompt("Verification code from email")
-        if not verification_code or not verification_code.strip():
-            print_error("Verification code is required")
-            raise typer.Exit(1) from None
-        verification_code = verification_code.strip()
-
-        # Prompt for new password with confirmation
-        while True:
-            new_password = getpass("New password: ")
-            if not new_password:
-                print_error("Password is required")
-                continue
-
-            if len(new_password) < 12:
-                print_error("Password must be at least 12 characters")
-                continue
-
-            confirm_password = getpass("Confirm new password: ")
-            if new_password != confirm_password:
-                print_error("Passwords do not match")
-                continue
-
-            break
-
-        try:
-            print_info("Resetting password...")
-            auth_client.confirm_password_reset(
-                username=e.username,
-                confirmation_code=verification_code,
-                new_password=new_password,
-            )
-            print_success("Password reset successfully!")
-
-            # Log in with the new password
-            print_info("Logging in with new password...")
-            tokens = auth_client.login(e.username, new_password)
-
-            print_success(f"Successfully logged in as {email}")
-
-            if tokens.expires_at:
-                expiry_str = tokens.expires_at.strftime("%Y-%m-%d %H:%M:%S %Z")
-                print_info(f"Session expires: {expiry_str}")
-
-            console.print("\n[bold cyan]Next Steps:[/bold cyan]")
-            console.print("  1. Run 'geni init' to configure your settings")
-            console.print("  2. Your credentials will be stored securely in AWS")
-
-        except AuthenticationError as reset_error:
-            print_error(f"Password reset failed: {reset_error}")
-            raise typer.Exit(1) from reset_error
+    except PasswordResetRequired:
+        # Handle admin-initiated password reset detected during SRP auth
+        _handle_password_reset(auth_client, email, getpass)
 
     except AuthenticationError as e:
         print_error(f"Authentication failed: {e}")
