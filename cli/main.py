@@ -838,34 +838,10 @@ def _handle_password_reset(auth_client: object, email: str, getpass: object) -> 
         print_error(f"Password reset failed: {reset_error}")
         raise typer.Exit(1) from reset_error
 
-    print_success("Password reset confirmed by Cognito.")
-
-    # Step 5: Auto-login with the same password (no retyping).
-    # Try SRP first; if that fails, fall back to USER_PASSWORD_AUTH
-    # which bypasses the SRP verifier.
-    print_info("Logging in with new password...")
-
-    tokens = None
-    try:
-        tokens = auth_client.login(email, new_password)
-    except AuthenticationError:
-        # SRP failed — try direct password auth as fallback
-        try:
-            print_info("Trying alternative auth method...")
-            tokens = auth_client.login_with_password(email, new_password)
-        except AuthenticationError as fallback_err:
-            print_error(f"Auto-login failed: {fallback_err}")
-            print_info("Please run 'geni login' to sign in with your new password.")
-            return
-
-    if tokens:
-        print_success(f"Successfully logged in as {email}")
-        if tokens.expires_at:
-            expiry_str = tokens.expires_at.strftime("%Y-%m-%d %H:%M:%S %Z")
-            print_info(f"Session expires: {expiry_str}")
-        console.print("\n[bold cyan]Next Steps:[/bold cyan]")
-        console.print("  1. Run 'geni init' to configure your settings")
-        console.print("  2. Your credentials will be stored securely in AWS")
+    print_success("Password has been reset successfully!")
+    console.print("\n[bold cyan]Next Steps:[/bold cyan]")
+    console.print("  1. Run [bold]geni login[/bold] to sign in with your new password")
+    console.print("  2. Run [bold]geni init[/bold] to configure your settings")
 
 
 @app.command()
@@ -877,6 +853,7 @@ def login(
     reset: bool = typer.Option(
         False, "--reset", help="Reset password using a verification code from email"
     ),
+    debug: bool = typer.Option(False, "--debug", help="Show verbose auth diagnostics"),
 ) -> None:
     """Login to Geni cloud service.
 
@@ -907,6 +884,14 @@ def login(
 
     # Get auth client
     auth_client = get_auth_client(use_keyring=not no_keyring)
+
+    # Enable debug logging if requested
+    if debug:
+        import logging
+
+        logging.basicConfig(level=logging.DEBUG, format="%(name)s %(message)s")
+        auth_client.debug = True
+        console.print("[dim]Debug mode enabled[/dim]")
 
     # If --reset flag, go directly to password reset flow
     if reset:
@@ -987,22 +972,6 @@ def login(
         _handle_password_reset(auth_client, email, getpass)
 
     except AuthenticationError as e:
-        # SRP failed — try USER_PASSWORD_AUTH as fallback before giving up.
-        # This handles cases where the SRP verifier wasn't updated correctly
-        # after a password reset.
-        try:
-            tokens = auth_client.login_with_password(email, password)
-            print_success(f"Successfully logged in as {email}")
-            if tokens.expires_at:
-                expiry_str = tokens.expires_at.strftime("%Y-%m-%d %H:%M:%S %Z")
-                print_info(f"Session expires: {expiry_str}")
-            console.print("\n[bold cyan]Next Steps:[/bold cyan]")
-            console.print("  1. Run 'geni init' to configure your settings")
-            console.print("  2. Your credentials will be stored securely in AWS")
-            return
-        except Exception:
-            pass  # Fallback also failed, continue with original error
-
         print_error(f"Authentication failed: {e}")
 
         # Offer password reset if login failed — the user may be in

@@ -272,6 +272,7 @@ class CognitoAuthClient:
         Raises:
             AuthenticationError on authentication failure
         """
+        debug = getattr(self, "debug", False)
         try:
             # Generate SRP values
             small_a, large_a = self._generate_random_key_pair()
@@ -300,6 +301,16 @@ class CognitoAuthClient:
             srp_b = challenge["SRP_B"]
             secret_block = challenge["SECRET_BLOCK"]
 
+            if debug:
+                logger.debug("SRP challenge received:")
+                logger.debug(f"  USERNAME sent: {username}")
+                logger.debug(f"  USER_ID_FOR_SRP: {user_id}")
+                logger.debug(f"  SALT: {salt[:16]}...")
+                logger.debug(f"  SRP_B length: {len(srp_b)}")
+                logger.debug(f"  Pool name for hash: {self.user_pool_id.split('_')[1]}")
+                logger.debug(f"  Password length: {len(password)}")
+                logger.debug(f"  Password repr: {repr(password)}")
+
             # Compute response
             timestamp = datetime.now(UTC).strftime("%a %b %d %H:%M:%S %Z %Y")
             claim = self._compute_claim(
@@ -320,6 +331,11 @@ class CognitoAuthClient:
                 "PASSWORD_CLAIM_SIGNATURE": claim,
                 "TIMESTAMP": timestamp,
             }
+
+            if debug:
+                logger.debug(f"  TIMESTAMP: {timestamp}")
+                logger.debug(f"  Claim signature length: {len(claim)}")
+                logger.debug("Sending respond_to_auth_challenge...")
 
             auth_result = self.client.respond_to_auth_challenge(
                 ClientId=self.client_id,
@@ -367,6 +383,10 @@ class CognitoAuthClient:
             # Check the error message to distinguish from wrong password.
             error_message = str(e)
             logger.debug(f"NotAuthorizedException detail: {error_message}")
+            if debug:
+                logger.debug(f"Full Cognito error: {error_message}")
+                if hasattr(e, "response"):
+                    logger.debug(f"Response metadata: {e.response}")
             if "password reset" in error_message.lower():
                 raise PasswordResetRequired(
                     username=username,
