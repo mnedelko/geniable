@@ -20,7 +20,15 @@ from cli.output_formatter import (
 )
 
 console = Console()
-app = typer.Typer(help="Jira issue management commands")
+app = typer.Typer(help="Issue management commands", invoke_without_command=True)
+
+
+@app.callback()
+def issues_default(ctx: typer.Context) -> None:
+    """Issue management commands."""
+    if ctx.invoked_subcommand is None:
+        # Default to 'list' when no subcommand is given
+        ctx.invoke(issues_list)
 
 
 def _require_auth() -> None:
@@ -44,20 +52,26 @@ def _require_auth() -> None:
 
 
 def _ensure_agent_installed() -> None:
-    """Ensure the Issue Resolver agent is installed in the project."""
+    """Ensure the Issue Resolver agent and /issues skill are installed."""
     from cli.agents import install_agents
+    from cli.skills import install_skills
 
     project_root = Path.cwd()
-    target_dir = project_root / ".claude" / "agents"
-    target_file = target_dir / "Issue Resolver.md"
 
-    if not target_file.exists():
+    # Install agent if missing
+    agent_dir = project_root / ".claude" / "agents"
+    if not (agent_dir / "Issue Resolver.md").exists():
         print_info("Installing Issue Resolver agent...")
-        results = install_agents(target_dir=target_dir, force=False, project_root=project_root)
+        results = install_agents(target_dir=agent_dir, force=False, project_root=project_root)
         if results.get("Issue Resolver.md"):
             print_success("Issue Resolver agent installed")
         else:
             print_warning("Could not install Issue Resolver agent (will continue anyway)")
+
+    # Install /issues skill if missing
+    commands_dir = project_root / ".claude" / "commands"
+    if not (commands_dir / "issues.md").exists():
+        install_skills(target_dir=commands_dir, force=False, project_root=project_root)
 
 
 def _build_resolve_prompt(issue: object) -> str:

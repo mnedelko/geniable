@@ -138,7 +138,11 @@ Update `.claude/settings.local.json` to add geni command permissions:
       "Bash(geni analyze fetch:*)",
       "Bash(geni analyze mark-done:*)",
       "Bash(geni ticket:*)",
-      "Bash(geni ticket create:*)"
+      "Bash(geni ticket create:*)",
+      "Bash(geni issues:*)",
+      "Bash(geni issues list:*)",
+      "Bash(geni issues resolve:*)",
+      "Bash(geni issues mark-done:*)"
     ]
   }
 }
@@ -173,19 +177,23 @@ Display a summary:
 
 **Installed**:
 - Agent: .claude/agents/Geni Analyzer.md
+- Agent: .claude/agents/Issue Resolver.md
 - Skill: .claude/commands/analyze-latest.md
+- Skill: .claude/commands/issues.md
 - Permissions: .claude/settings.local.json
 
 **Next Steps**:
-1. Restart Claude Code to load the new command
+1. Restart Claude Code to load the new commands
 2. Run `/analyze-latest` to analyze your LangSmith threads
-3. Or ask: "Analyze my LangSmith threads for quality issues"
+3. Run `/issues` to browse and resolve Jira issues
+4. Or ask: "Analyze my LangSmith threads for quality issues"
 
 **Useful Commands**:
 - `geni login` - Re-authenticate
 - `geni configure --show` - View current config
 - `geni configure --validate` - Test connections
 - `geni analyze fetch` - Fetch threads manually
+- `geni issues list` - Browse open Jira issues
 ```
 
 ## Error Handling

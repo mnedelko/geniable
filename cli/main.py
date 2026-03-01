@@ -858,26 +858,29 @@ def _ensure_skills_installed() -> None:
     """Ensure Geniable agents and skills are installed (non-force).
 
     Called after successful login to make sure the Issue Resolver
-    and other agents are available. Does not overwrite existing files.
+    and other agents/skills are available. Does not overwrite existing files.
     """
     try:
         from cli.agents import install_agents
+        from cli.skills import install_skills
 
         project_root = Path.cwd()
-        target_dir = project_root / ".claude" / "agents"
 
         # Only install if the target directory's parent (.claude) exists
         # This indicates the project has been initialized
         if (project_root / ".claude").exists():
-            results = install_agents(target_dir=target_dir, force=False, project_root=project_root)
-            installed = [name for name, success in results.items() if success]
-            if installed:
-                # Check if any were actually newly created (vs already existing)
-                for name in installed:
-                    if not (target_dir / name).exists():
-                        console.print(f"[dim]Installed agent: {name}[/dim]")
+            install_agents(
+                target_dir=project_root / ".claude" / "agents",
+                force=False,
+                project_root=project_root,
+            )
+            install_skills(
+                target_dir=project_root / ".claude" / "commands",
+                force=False,
+                project_root=project_root,
+            )
     except Exception:
-        # Non-critical — don't fail login over agent installation
+        # Non-critical — don't fail login over agent/skill installation
         pass
 
 
