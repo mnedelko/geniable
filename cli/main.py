@@ -775,10 +775,12 @@ def version() -> None:
 
 
 def _handle_password_reset(auth_client: object, email: str, getpass: object) -> None:
-    """Handle the admin-initiated password reset flow.
+    """Handle password reset via the standard ForgotPassword flow.
 
-    Prompts for verification code and new password, confirms the reset
-    with Cognito, then attempts to log the user in with the new credentials.
+    Initiates a fresh ForgotPassword request (sends a new verification code),
+    then completes the reset with ConfirmForgotPassword. This is more reliable
+    than using the admin-provided code directly, which can fail to transition
+    the user out of RESET_REQUIRED status.
 
     Args:
         auth_client: CognitoAuthClient instance
@@ -787,17 +789,26 @@ def _handle_password_reset(auth_client: object, email: str, getpass: object) -> 
     """
     from cli.auth import AuthenticationError
 
-    console.print("\n[cyan]A verification code was sent to your email.[/cyan]")
+    # Step 1: Initiate ForgotPassword to send a fresh verification code
+    print_info("Sending a fresh verification code to your email...")
+    try:
+        delivery = auth_client.initiate_forgot_password(username=email)
+        destination = delivery.get("Destination", "your email")
+        console.print(f"\n[cyan]A new verification code has been sent to {destination}.[/cyan]")
+    except AuthenticationError as e:
+        print_error(f"Could not initiate password reset: {e}")
+        raise typer.Exit(1) from e
+
     console.print("[dim]Requirements: min 12 chars, uppercase, lowercase, numbers[/dim]\n")
 
-    # Prompt for verification code
+    # Step 2: Prompt for the fresh verification code
     verification_code = typer.prompt("Verification code from email")
     if not verification_code or not verification_code.strip():
         print_error("Verification code is required")
         raise typer.Exit(1)
     verification_code = verification_code.strip()
 
-    # Prompt for new password with confirmation
+    # Step 3: Prompt for new password with confirmation
     while True:
         new_password = getpass("New password: ")
         if not new_password:
@@ -815,6 +826,7 @@ def _handle_password_reset(auth_client: object, email: str, getpass: object) -> 
 
         break
 
+    # Step 4: Confirm the reset with the fresh code
     try:
         print_info("Resetting password...")
         auth_client.confirm_password_reset(

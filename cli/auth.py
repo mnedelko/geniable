@@ -442,14 +442,49 @@ class CognitoAuthClient:
             logger.error(f"Password change error: {e}")
             raise AuthenticationError(f"Password change failed: {e}") from e
 
+    def initiate_forgot_password(self, username: str) -> dict[str, Any]:
+        """Initiate the forgot-password flow.
+
+        Calls the Cognito ForgotPassword API which sends a fresh
+        verification code to the user's email. This works for users in
+        CONFIRMED or RESET_REQUIRED status.
+
+        Args:
+            username: User's email/username
+
+        Returns:
+            Code delivery details from Cognito
+
+        Raises:
+            AuthenticationError on failure
+        """
+        try:
+            response = self.client.forgot_password(
+                ClientId=self.client_id,
+                Username=username,
+            )
+            return response.get("CodeDeliveryDetails", {})
+        except self.client.exceptions.UserNotFoundException as e:
+            raise AuthenticationError("User not found") from e
+        except self.client.exceptions.InvalidParameterException as e:
+            raise AuthenticationError(
+                "Cannot initiate password reset. Please contact your administrator."
+            ) from e
+        except self.client.exceptions.LimitExceededException as e:
+            raise AuthenticationError(
+                "Too many password reset attempts. Please wait before trying again."
+            ) from e
+        except Exception as e:
+            logger.error(f"Forgot password initiation error: {e}")
+            raise AuthenticationError(f"Password reset initiation failed: {e}") from e
+
     def confirm_password_reset(
         self, username: str, confirmation_code: str, new_password: str
     ) -> None:
-        """Confirm an admin-initiated password reset.
+        """Complete a password reset with a verification code.
 
-        After an admin calls AdminResetUserPassword, the user receives a
-        verification code via email. This method completes the reset by
-        submitting the code and the new password to Cognito.
+        Calls Cognito ConfirmForgotPassword to set the new password.
+        The verification code should come from initiate_forgot_password().
 
         Args:
             username: User's email/username
