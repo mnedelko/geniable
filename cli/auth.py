@@ -256,10 +256,7 @@ class CognitoAuthClient:
         return self._client
 
     def login(self, username: str, password: str) -> AuthTokens:
-        """Authenticate user with USER_PASSWORD_AUTH flow.
-
-        Uses direct password authentication (over HTTPS). Falls back to
-        SRP if USER_PASSWORD_AUTH is not available on the App Client.
+        """Authenticate user — tries USER_PASSWORD_AUTH, then SRP fallback.
 
         Args:
             username: User's email/username
@@ -270,16 +267,30 @@ class CognitoAuthClient:
 
         Raises:
             AuthenticationError on authentication failure
+            PasswordChangeRequired when temporary password must be changed
+            PasswordResetRequired when admin has reset the password
         """
         try:
             return self._login_password_auth(username, password)
-        except self.client.exceptions.InvalidParameterException:
-            # USER_PASSWORD_AUTH not enabled — fall back to SRP
-            logger.debug("USER_PASSWORD_AUTH not available, falling back to SRP")
+        except (AuthenticationError, PasswordChangeRequired, PasswordResetRequired):
+            raise  # Definitive errors — don't retry with SRP
+        except Exception as e:
+            # USER_PASSWORD_AUTH not available or unexpected error — try SRP
+            logger.debug(
+                "USER_PASSWORD_AUTH failed (%s: %s), falling back to SRP",
+                type(e).__name__,
+                e,
+            )
             return self._login_srp(username, password)
 
     def _login_password_auth(self, username: str, password: str) -> AuthTokens:
-        """Authenticate using USER_PASSWORD_AUTH flow."""
+        """Authenticate using USER_PASSWORD_AUTH flow.
+
+        Only converts definitive errors (user not found, not confirmed,
+        password reset required) to our exception types. All other
+        exceptions propagate to login() for SRP fallback.
+        """
+        logger.debug("Attempting USER_PASSWORD_AUTH flow")
         try:
             response = self.client.initiate_auth(
                 AuthFlow="USER_PASSWORD_AUTH",
@@ -289,46 +300,51 @@ class CognitoAuthClient:
                     "PASSWORD": password,
                 },
             )
-
-            challenge_name = response.get("ChallengeName")
-
-            if challenge_name == "NEW_PASSWORD_REQUIRED":
-                raise PasswordChangeRequired(
-                    session=response["Session"],
-                    user_id=response["ChallengeParameters"].get("USER_ID_FOR_SRP", username),
-                    message="Password change required for new account.",
-                )
-
-            if "AuthenticationResult" not in response:
-                raise AuthenticationError(f"Unexpected challenge: {challenge_name}")
-
-            return self._parse_auth_result(response["AuthenticationResult"], username)
-
         except self.client.exceptions.PasswordResetRequiredException as e:
             raise PasswordResetRequired(
                 username=username,
                 message="Password reset required. Use 'geni login --reset' to set a new password.",
             ) from e
+        except self.client.exceptions.UserNotFoundException as e:
+            raise AuthenticationError("User not found") from e
+        except self.client.exceptions.UserNotConfirmedException as e:
+            raise AuthenticationError("User account not confirmed") from e
         except self.client.exceptions.NotAuthorizedException as e:
             error_message = str(e)
+            logger.debug("USER_PASSWORD_AUTH NotAuthorizedException: %s", error_message)
             if "password reset" in error_message.lower():
                 raise PasswordResetRequired(
                     username=username,
                     message="Password reset required. Use 'geni login --reset' to set a new password.",
                 ) from e
-            raise AuthenticationError("Invalid username or password") from e
-        except self.client.exceptions.UserNotFoundException as e:
-            raise AuthenticationError("User not found") from e
-        except self.client.exceptions.UserNotConfirmedException as e:
-            raise AuthenticationError("User account not confirmed") from e
-        except (AuthenticationError, PasswordChangeRequired, PasswordResetRequired):
+            # Check if this is a genuine wrong-password error vs flow-not-enabled
+            if "incorrect" in error_message.lower():
+                raise AuthenticationError("Invalid username or password") from e
+            # For any other NotAuthorizedException (e.g. flow not enabled),
+            # re-raise so login() falls back to SRP
             raise
-        except Exception as e:
-            logger.error(f"Authentication error: {e}")
-            raise AuthenticationError(f"Authentication failed: {e}") from e
+        # Any other exception (InvalidParameterException, etc.) propagates
+        # to login() for SRP fallback
+
+        logger.debug("USER_PASSWORD_AUTH initiate_auth succeeded")
+
+        challenge_name = response.get("ChallengeName")
+
+        if challenge_name == "NEW_PASSWORD_REQUIRED":
+            raise PasswordChangeRequired(
+                session=response["Session"],
+                user_id=response["ChallengeParameters"].get("USER_ID_FOR_SRP", username),
+                message="Password change required for new account.",
+            )
+
+        if "AuthenticationResult" not in response:
+            raise AuthenticationError(f"Unexpected challenge: {challenge_name}")
+
+        return self._parse_auth_result(response["AuthenticationResult"], username)
 
     def _login_srp(self, username: str, password: str) -> AuthTokens:
         """Authenticate using USER_SRP_AUTH flow (fallback)."""
+        logger.debug("Attempting USER_SRP_AUTH flow")
         try:
             small_a, large_a = self._generate_random_key_pair()
 
@@ -390,6 +406,7 @@ class CognitoAuthClient:
             ) from e
         except self.client.exceptions.NotAuthorizedException as e:
             error_message = str(e)
+            logger.debug("SRP NotAuthorizedException: %s", error_message)
             if "password reset" in error_message.lower():
                 raise PasswordResetRequired(
                     username=username,
@@ -403,7 +420,7 @@ class CognitoAuthClient:
         except (AuthenticationError, PasswordChangeRequired, PasswordResetRequired):
             raise
         except Exception as e:
-            logger.error(f"Authentication error: {e}")
+            logger.error("SRP authentication error: %s", e)
             raise AuthenticationError(f"Authentication failed: {e}") from e
 
     def _parse_auth_result(self, result: dict[str, Any], username: str) -> AuthTokens:
