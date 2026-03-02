@@ -1,4 +1,8 @@
-"""Jira issue management commands."""
+"""Issue management commands.
+
+All provider calls (Jira/Notion) are routed through the Lambda backend
+via IntegrationServiceClient for centralized credential management.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,7 @@ import typer
 from rich.console import Console
 
 from cli.config_manager import ConfigManager
+from cli.issue_display import IssueDisplay
 from cli.output_formatter import (
     print_error,
     print_info,
@@ -51,6 +56,29 @@ def _require_auth() -> None:
         raise typer.Exit(1) from e
 
 
+def _get_integration_client(config: object) -> object:
+    """Create an IntegrationServiceClient with auth token.
+
+    Args:
+        config: AppConfig object
+
+    Returns:
+        IntegrationServiceClient instance
+    """
+    from agent.api_clients.integration_client import IntegrationServiceClient
+    from cli.auth import get_auth_client
+
+    auth_client = get_auth_client()
+    tokens = auth_client.get_current_tokens()
+    auth_token = tokens.id_token if tokens else None
+
+    return IntegrationServiceClient(
+        endpoint=config.aws.integration_endpoint,  # type: ignore[attr-defined]
+        api_key=config.aws.api_key,  # type: ignore[attr-defined]
+        auth_token=auth_token,
+    )
+
+
 def _ensure_agent_installed() -> None:
     """Ensure the Issue Resolver agent and /issues skill are installed."""
     from cli.agents import install_agents
@@ -74,19 +102,15 @@ def _ensure_agent_installed() -> None:
         install_skills(target_dir=commands_dir, force=False, project_root=project_root)
 
 
-def _build_resolve_prompt(issue: object) -> str:
+def _build_resolve_prompt(issue: IssueDisplay) -> str:
     """Build the Claude Code prompt for resolving an issue.
 
     Args:
-        issue: JiraIssue object with issue details
+        issue: IssueDisplay object with issue details
 
     Returns:
         Formatted prompt string
     """
-    from cli.jira_client import JiraIssue
-
-    assert isinstance(issue, JiraIssue)
-
     description_section = ""
     if issue.description:
         description_section = f"""
@@ -154,20 +178,16 @@ geni issues mark-done {issue.key}
 Begin by presenting the issue details and asking the user how they'd like to approach it."""
 
 
-def _spawn_claude_code_for_issue(issue: object, verbose: bool = False) -> int:
-    """Spawn Claude Code to resolve a Jira issue.
+def _spawn_claude_code_for_issue(issue: IssueDisplay, verbose: bool = False) -> int:
+    """Spawn Claude Code to resolve an issue.
 
     Args:
-        issue: JiraIssue object
+        issue: IssueDisplay object
         verbose: Whether to show verbose output
 
     Returns:
         Exit code (0 for success)
     """
-    from cli.jira_client import JiraIssue
-
-    assert isinstance(issue, JiraIssue)
-
     # If already inside Claude Code, just output the prompt
     if os.environ.get("CLAUDECODE") == "1":
         prompt = _build_resolve_prompt(issue)
@@ -241,9 +261,9 @@ def issues_list(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     limit: int = typer.Option(50, "--limit", "-l", help="Maximum issues to fetch"),
 ) -> None:
-    """List open Jira issues and select one to resolve with Claude Code.
+    """List open issues and select one to resolve with Claude Code.
 
-    Displays incomplete issues from your configured Jira project,
+    Displays incomplete issues from your configured project,
     lets you pick one interactively, and launches Claude Code to
     collaboratively work on the resolution.
     """
@@ -256,36 +276,32 @@ def issues_list(
         config_manager = ConfigManager()
         config = config_manager.load()
 
-        # Validate provider is Jira
-        if config.provider != "jira":
-            print_error(f"Issues command requires Jira provider (current: {config.provider})")
-            print_info("Configure Jira with 'geni init' or update ~/.geniable.yaml")
+        if not config.provider:
+            print_error("Issue provider not configured")
+            print_info("Run 'geni init' to set up configuration")
             raise typer.Exit(1)
 
-        if not config.jira:
+        if config.provider == "jira" and not config.jira:
             print_error("Jira configuration not found")
             print_info("Run 'geni init' to configure Jira credentials")
             raise typer.Exit(1)
 
-        # Create Jira client
-        from cli.jira_client import JiraClient
+        # Route through Lambda backend
+        client = _get_integration_client(config)
 
-        client = JiraClient(
-            base_url=config.jira.base_url,
-            email=config.jira.email,
-            api_token=config.jira.api_token,
-        )
+        project_key = config.jira.project_key if config.jira else ""
+        print_info(f"Fetching open issues from {project_key}...")
 
-        # Fetch issues
-        print_info(f"Fetching open issues from {config.jira.project_key}...")
-
-        issues = client.search_issues(
-            project_key=config.jira.project_key,
+        issue_dicts = client.search_issues(  # type: ignore[attr-defined]
+            provider=config.provider,
+            project_key=project_key,
             max_results=limit,
         )
 
+        issues = [IssueDisplay.from_dict(d) for d in issue_dicts]
+
         if not issues:
-            print_warning(f"No open issues found in {config.jira.project_key}")
+            print_warning(f"No open issues found in {project_key}")
             raise typer.Exit(0)
 
         # Count by priority
@@ -296,7 +312,7 @@ def issues_list(
 
         priority_summary = ", ".join(f"{count} {name}" for name, count in priority_counts.items())
         print_success(
-            f"Found {len(issues)} open issues in {config.jira.project_key} " f"({priority_summary})"
+            f"Found {len(issues)} open issues in {project_key} " f"({priority_summary})"
         )
 
         # Build choices for questionary
@@ -363,10 +379,10 @@ def issues_list(
 
 @app.command("resolve")
 def issues_resolve(
-    key: str = typer.Argument(..., help="Jira issue key (e.g., AIEV-37)"),
+    key: str = typer.Argument(..., help="Issue key (e.g., AIEV-37)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ) -> None:
-    """Resolve a specific Jira issue with Claude Code.
+    """Resolve a specific issue with Claude Code.
 
     Fetches the issue details and launches Claude Code for interactive resolution.
 
@@ -380,32 +396,29 @@ def issues_resolve(
         config_manager = ConfigManager()
         config = config_manager.load()
 
-        # Validate provider is Jira
-        if config.provider != "jira":
-            print_error(f"Issues command requires Jira provider (current: {config.provider})")
+        if not config.provider:
+            print_error("Issue provider not configured")
             raise typer.Exit(1)
 
-        if not config.jira:
-            print_error("Jira configuration not found")
-            raise typer.Exit(1)
+        # Route through Lambda backend
+        client = _get_integration_client(config)
 
-        # Create Jira client
-        from cli.jira_client import JiraClient
-
-        client = JiraClient(
-            base_url=config.jira.base_url,
-            email=config.jira.email,
-            api_token=config.jira.api_token,
-        )
-
-        # Fetch the issue
         print_info(f"Fetching issue {key}...")
 
         try:
-            issue = client.get_issue(key)
+            issue_dict = client.get_issue(  # type: ignore[attr-defined]
+                provider=config.provider,
+                issue_key=key,
+            )
         except Exception as e:
             print_error(f"Could not find issue {key}: {e}")
             raise typer.Exit(1) from e
+
+        if not issue_dict:
+            print_error(f"Issue {key} not found")
+            raise typer.Exit(1)
+
+        issue = IssueDisplay.from_dict(issue_dict)
 
         print_success(f"Found: {issue.summary}")
         console.print(f"  [dim]Status:[/dim] {issue.status}")
@@ -439,12 +452,12 @@ def issues_resolve(
 
 @app.command("mark-done")
 def issues_mark_done(
-    key: str = typer.Argument(..., help="Jira issue key (e.g., AIEV-37)"),
+    key: str = typer.Argument(..., help="Issue key (e.g., AIEV-37)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ) -> None:
-    """Mark a Jira issue as Done.
+    """Mark an issue as Done.
 
-    Transitions the issue to the Done status in Jira.
+    Transitions the issue to the Done status via the backend.
 
     Example:
         geni issues mark-done AIEV-37
@@ -461,22 +474,11 @@ def issues_mark_done(
             raise typer.Exit(1)
 
         # Get auth token and route through Lambda backend
-        from agent.api_clients.integration_client import IntegrationServiceClient
-        from cli.auth import get_auth_client
-
-        auth_client = get_auth_client()
-        tokens = auth_client.get_current_tokens()
-        auth_token = tokens.id_token if tokens else None
-
-        client = IntegrationServiceClient(
-            endpoint=config.aws.integration_endpoint,
-            api_key=config.aws.api_key,
-            auth_token=auth_token,
-        )
+        client = _get_integration_client(config)
 
         print_info(f"Transitioning {key} to Done...")
 
-        result = client.transition_ticket(
+        result = client.transition_ticket(  # type: ignore[attr-defined]
             provider=config.provider,
             issue_key=key,
             target_status="Done",

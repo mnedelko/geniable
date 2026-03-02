@@ -269,54 +269,72 @@ class ServiceValidator:
                 message=f"Validation error: {str(e)}",
             )
 
-    def validate_jira(
-        self, base_url: str, email: str, api_token: str, project_key: str
+    def validate_provider_via_lambda(
+        self,
+        endpoint: str,
+        provider: str,
+        auth_token: str | None = None,
+        api_key: str | None = None,
     ) -> ValidationResult:
-        """Validate Jira credentials.
+        """Validate a provider connection via the Lambda backend.
+
+        Routes the validation through the Lambda backend so that per-user
+        credentials stored in AWS are used (no direct Jira/Notion API calls).
 
         Args:
-            base_url: Jira instance URL
-            email: Jira user email
-            api_token: Jira API token
-            project_key: Jira project key
+            endpoint: Integration Service URL
+            provider: Provider name ('jira' or 'notion')
+            auth_token: Cognito auth token (Bearer token)
+            api_key: Optional API Gateway key
 
         Returns:
             Validation result
         """
+        service_name = provider.capitalize()
         try:
-            # Test authentication by fetching project
-            response = requests.get(
-                f"{base_url.rstrip('/')}/rest/api/3/project/{project_key}",
-                auth=(email, api_token),
-                timeout=self.timeout,
+            headers: dict[str, str] = {"Content-Type": "application/json"}
+            if auth_token:
+                headers["Authorization"] = f"Bearer {auth_token}"
+            if api_key:
+                headers["X-Api-Key"] = api_key
+
+            response = requests.post(
+                f"{endpoint.rstrip('/')}/integrations/provider/validate",
+                json={"provider": provider},
+                headers=headers,
+                timeout=self.INTEGRATION_SERVICE_TIMEOUT,
             )
 
             if response.status_code == 200:
                 data = response.json()
-                project_name = data.get("name", project_key)
-                return ValidationResult(
-                    service="Jira",
-                    success=True,
-                    message=f"Connected to project '{project_name}'",
-                    details={"status_code": 200, "project_name": project_name},
-                )
+                if data.get("success"):
+                    info = data.get("provider_info", {})
+                    detail = info.get("project_name") or info.get("base_url") or ""
+                    msg = f"Connected{f' to {detail}' if detail else ''}"
+                    return ValidationResult(
+                        service=service_name,
+                        success=True,
+                        message=msg,
+                        details=info,
+                    )
+                else:
+                    error = data.get("provider_info", {}).get("error", "Validation failed")
+                    return ValidationResult(
+                        service=service_name,
+                        success=False,
+                        message=error,
+                        details=data.get("provider_info"),
+                    )
             elif response.status_code == 401:
                 return ValidationResult(
-                    service="Jira",
+                    service=service_name,
                     success=False,
-                    message="Invalid credentials",
+                    message="Authentication required - run 'geni login'",
                     details={"status_code": 401},
-                )
-            elif response.status_code == 404:
-                return ValidationResult(
-                    service="Jira",
-                    success=False,
-                    message=f"Project '{project_key}' not found",
-                    details={"status_code": 404},
                 )
             else:
                 return ValidationResult(
-                    service="Jira",
+                    service=service_name,
                     success=False,
                     message=f"Unexpected response: {response.status_code}",
                     details={"status_code": response.status_code},
@@ -324,92 +342,19 @@ class ServiceValidator:
 
         except requests.exceptions.Timeout:
             return ValidationResult(
-                service="Jira",
+                service=service_name,
                 success=False,
                 message="Connection timeout",
             )
         except requests.exceptions.ConnectionError:
             return ValidationResult(
-                service="Jira",
-                success=False,
-                message="Connection failed - check URL",
-            )
-        except Exception as e:
-            return ValidationResult(
-                service="Jira",
-                success=False,
-                message=f"Validation error: {str(e)}",
-            )
-
-    def validate_notion(self, api_key: str, database_id: str) -> ValidationResult:
-        """Validate Notion credentials.
-
-        Args:
-            api_key: Notion API key (should start with 'secret_')
-            database_id: Notion database ID
-
-        Returns:
-            Validation result
-        """
-        try:
-            response = requests.get(
-                f"https://api.notion.com/v1/databases/{database_id}",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Notion-Version": "2022-06-28",
-                },
-                timeout=self.timeout,
-            )
-
-            if response.status_code == 200:
-                data = response.json()
-                title_parts = data.get("title", [])
-                db_name = (
-                    title_parts[0].get("plain_text", "Untitled") if title_parts else "Untitled"
-                )
-                return ValidationResult(
-                    service="Notion",
-                    success=True,
-                    message=f"Connected to database '{db_name}'",
-                    details={"status_code": 200, "database_name": db_name},
-                )
-            elif response.status_code == 401:
-                return ValidationResult(
-                    service="Notion",
-                    success=False,
-                    message="Invalid API key",
-                    details={"status_code": 401},
-                )
-            elif response.status_code == 404:
-                return ValidationResult(
-                    service="Notion",
-                    success=False,
-                    message="Database not found or not shared with integration",
-                    details={"status_code": 404},
-                )
-            else:
-                return ValidationResult(
-                    service="Notion",
-                    success=False,
-                    message=f"Unexpected response: {response.status_code}",
-                    details={"status_code": response.status_code},
-                )
-
-        except requests.exceptions.Timeout:
-            return ValidationResult(
-                service="Notion",
-                success=False,
-                message="Connection timeout",
-            )
-        except requests.exceptions.ConnectionError:
-            return ValidationResult(
-                service="Notion",
+                service=service_name,
                 success=False,
                 message="Connection failed - check network",
             )
         except Exception as e:
             return ValidationResult(
-                service="Notion",
+                service=service_name,
                 success=False,
                 message=f"Validation error: {str(e)}",
             )
@@ -438,34 +383,31 @@ class ServiceValidator:
             )
 
         # Validate AWS endpoints
+        endpoint = ""
+        api_key_val: str | None = None
         if "aws" in config:
             aws = config["aws"]
-            api_key = aws.get("api_key") or None
+            api_key_val = aws.get("api_key") or None
+            endpoint = aws["integration_endpoint"]
 
             results.append(
-                self.validate_integration_endpoint(aws["integration_endpoint"], api_key, auth_token)
+                self.validate_integration_endpoint(endpoint, api_key_val, auth_token)
             )
             results.append(
-                self.validate_evaluation_endpoint(aws["evaluation_endpoint"], api_key, auth_token)
+                self.validate_evaluation_endpoint(aws["evaluation_endpoint"], api_key_val, auth_token)
             )
 
-        # Validate provider-specific credentials
+        # Validate provider via Lambda (uses per-user credentials)
         provider = config.get("provider", "none")
-
-        if provider == "jira" and "jira" in config:
-            jira = config["jira"]
+        if provider in ("jira", "notion") and endpoint:
             results.append(
-                self.validate_jira(
-                    jira["base_url"],
-                    jira["email"],
-                    jira["api_token"],
-                    jira["project_key"],
+                self.validate_provider_via_lambda(
+                    endpoint=endpoint,
+                    provider=provider,
+                    auth_token=auth_token,
+                    api_key=api_key_val,
                 )
             )
-
-        if provider == "notion" and "notion" in config:
-            notion = config["notion"]
-            results.append(self.validate_notion(notion["api_key"], notion["database_id"]))
 
         return results
 

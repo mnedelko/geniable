@@ -391,6 +391,109 @@ class IntegrationServiceClient:
             logger.error(f"Failed to transition ticket: {e}")
             raise
 
+    def search_issues(
+        self,
+        provider: str,
+        project_key: str,
+        max_results: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Search for open issues via the Lambda backend.
+
+        Args:
+            provider: Provider name ('jira' or 'notion')
+            project_key: Project identifier
+            max_results: Maximum number of results
+
+        Returns:
+            List of issue dicts
+        """
+        try:
+            request_data = {
+                "provider": provider,
+                "project_key": project_key,
+                "max_results": max_results,
+            }
+
+            response = self._session.post(
+                f"{self.endpoint}/integrations/issues/search",
+                json=request_data,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+
+            result: dict[str, Any] = response.json()
+            issues: list[dict[str, Any]] = result.get("issues", [])
+            return issues
+
+        except Exception as e:
+            logger.error(f"Failed to search issues: {e}")
+            raise
+
+    def get_issue(
+        self,
+        provider: str,
+        issue_key: str,
+    ) -> dict[str, Any] | None:
+        """Get a single issue by key via the Lambda backend.
+
+        Args:
+            provider: Provider name ('jira' or 'notion')
+            issue_key: Issue identifier
+
+        Returns:
+            Issue dict or None
+        """
+        try:
+            request_data = {
+                "provider": provider,
+                "issue_key": issue_key,
+            }
+
+            response = self._session.post(
+                f"{self.endpoint}/integrations/issues/get",
+                json=request_data,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+
+            result: dict[str, Any] = response.json()
+            return result.get("issue")
+
+        except Exception as e:
+            logger.error(f"Failed to get issue: {e}")
+            raise
+
+    def validate_provider(
+        self,
+        provider: str,
+    ) -> dict[str, Any]:
+        """Validate a provider connection via the Lambda backend.
+
+        Args:
+            provider: Provider name ('jira' or 'notion')
+
+        Returns:
+            Validation result dict with 'success' and 'provider_info'
+        """
+        try:
+            request_data = {
+                "provider": provider,
+            }
+
+            response = self._session.post(
+                f"{self.endpoint}/integrations/provider/validate",
+                json=request_data,
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+
+            result: dict[str, Any] = response.json()
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to validate provider: {e}")
+            raise
+
     def validate_connection(self) -> bool:
         """Validate connection to the Integration Service.
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from cli.commands.issues import _build_resolve_prompt, _format_priority_style
-from cli.jira_client import JiraIssue
+from cli.issue_display import IssueDisplay
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -19,8 +19,8 @@ def _make_issue(
     assignee: str | None = "Test User",
     issue_type: str = "Bug",
     labels: list[str] | None = None,
-) -> JiraIssue:
-    return JiraIssue(
+) -> IssueDisplay:
+    return IssueDisplay(
         key=key,
         summary=summary,
         status=status,
