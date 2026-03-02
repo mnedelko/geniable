@@ -263,6 +263,30 @@ def _setup_ci_mode(config_manager: ConfigManager) -> str:
     return api_key
 
 
+def _ensure_skills_installed() -> None:
+    """Ensure Geniable agents and skills are installed if .claude/ exists."""
+    try:
+        from pathlib import Path
+
+        from cli.agents import install_agents
+        from cli.skills import install_skills
+
+        project_root = Path.cwd()
+        if (project_root / ".claude").exists():
+            install_agents(
+                target_dir=project_root / ".claude" / "agents",
+                force=False,
+                project_root=project_root,
+            )
+            install_skills(
+                target_dir=project_root / ".claude" / "commands",
+                force=False,
+                project_root=project_root,
+            )
+    except Exception:
+        pass
+
+
 def _require_auth() -> None:
     """Require authentication before proceeding."""
     import typer as t
@@ -278,12 +302,12 @@ def _require_auth() -> None:
     except (ImportError, ValueError) as e:
         print_error(f"Authentication module not configured: {e}")
         print_info("Ensure AWS Cognito is configured properly")
-        raise t.Exit(1)
+        raise t.Exit(1) from e
     except t.Exit:
         raise
     except Exception as e:
         print_error(f"Authentication check failed: {e}")
-        raise t.Exit(1)
+        raise t.Exit(1) from e
 
 
 def _get_auth_token() -> str | None:
@@ -325,6 +349,9 @@ def analyze_latest(
     """
     # Check auth status
     _require_auth()
+
+    # Ensure agents and skills are installed
+    _ensure_skills_installed()
 
     # Only show detailed logs in verbose mode
     if verbose:
@@ -474,14 +501,14 @@ def analyze_latest(
     except FileNotFoundError as e:
         print_error(str(e))
         print_info("Run 'geni init' to set up configuration")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except typer.Exit:
         raise
     except Exception as e:
         print_error(f"Analysis failed: {e}")
         if verbose:
             console.print_exception()
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command("specific")
@@ -587,10 +614,7 @@ def analyze_specific(
         for idx, thread in enumerate(threads, 1):
             # Format duration
             duration = thread.duration_seconds
-            if duration > 60:
-                duration_str = f"{duration / 60:.1f}m"
-            else:
-                duration_str = f"{duration:.1f}s"
+            duration_str = f"{duration / 60:.1f}m" if duration > 60 else f"{duration:.1f}s"
 
             # Check if processed
             is_processed = thread.thread_id in processed_ids
@@ -737,15 +761,15 @@ def analyze_specific(
     except FileNotFoundError as e:
         print_error(str(e))
         print_info("Run 'geni init' to set up configuration")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except KeyboardInterrupt:
         print_warning("\nCancelled")
-        raise typer.Exit(0)
+        raise typer.Exit(0) from None
     except Exception as e:
         print_error(f"Analysis failed: {e}")
         if verbose:
             console.print_exception()
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command("fetch")
@@ -864,9 +888,9 @@ def fetch(
                     "returned": result.returned,
                 }
                 print(yaml.dump(output_data, default_flow_style=False, allow_unicode=True))
-            except ImportError:
+            except ImportError as e:
                 print_error("PyYAML is required for YAML output. Install with: pip install pyyaml")
-                raise typer.Exit(1)
+                raise typer.Exit(1) from e
         else:
             print_error(f"Unsupported output format: {output}")
             print_info("Supported formats: json, yaml, summary")
@@ -875,12 +899,12 @@ def fetch(
     except FileNotFoundError as e:
         print_error(str(e))
         print_info("Run 'geni init' to set up configuration")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except Exception as e:
         print_error(f"Fetch failed: {e}")
         if verbose:
             console.print_exception()
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @app.command("mark-done")
@@ -948,9 +972,9 @@ def mark_done(
     except FileNotFoundError as e:
         print_error(str(e))
         print_info("Run 'geni init' to set up configuration")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
     except Exception as e:
         print_error(f"Mark-done failed: {e}")
         if verbose:
             console.print_exception()
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e

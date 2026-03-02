@@ -160,10 +160,29 @@ def init(
             state_file.write_text(json.dumps(initial_state, indent=2))
             print_info(f"Processing state initialized: {state_file}")
 
+        # Install agents and skills into .claude/ directory
+        try:
+            from cli.agents import install_agents
+            from cli.skills import install_skills
+
+            project_root = Path.cwd()
+            agents_dir = project_root / ".claude" / "agents"
+            commands_dir = project_root / ".claude" / "commands"
+            agents_dir.mkdir(parents=True, exist_ok=True)
+            commands_dir.mkdir(parents=True, exist_ok=True)
+
+            install_agents(target_dir=agents_dir, force=False, project_root=project_root)
+            install_skills(target_dir=commands_dir, force=False, project_root=project_root)
+            print_success("Installed Claude Code agents and skills")
+        except Exception as e:
+            print_warning(f"Could not install agents/skills: {e}")
+
         # Show next steps
         console.print("\n[bold cyan]Setup Complete![/bold cyan]")
         console.print("\n[bold]Next Steps:[/bold]")
-        console.print("  1. [dim]Run analysis:[/dim]  geni analyze-latest")
+        console.print("  1. [dim]Restart Claude Code to load new commands[/dim]")
+        console.print("  2. [dim]Run analysis:[/dim]  /analyze-latest")
+        console.print("  3. [dim]Browse issues:[/dim]  /issues")
         console.print("\n[dim]Claude Code agent integration is configured.[/dim]")
         console.print("[dim]Use /agent in Claude Code to leverage the Geniable pipeline.[/dim]")
 
