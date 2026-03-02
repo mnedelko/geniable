@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 SKILLS = [
     "analyze-latest.md",
     "geni-init.md",
+    "instrument-tracing.md",
     "issues.md",
 ]
 

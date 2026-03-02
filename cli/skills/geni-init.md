@@ -180,13 +180,15 @@ Display a summary:
 - Agent: .claude/agents/Issue Resolver.md
 - Skill: .claude/commands/analyze-latest.md
 - Skill: .claude/commands/issues.md
+- Skill: .claude/commands/instrument-tracing.md
 - Permissions: .claude/settings.local.json
 
 **Next Steps**:
 1. Restart Claude Code to load the new commands
-2. Run `/analyze-latest` to analyze your LangSmith threads
-3. Run `/issues` to browse and resolve Jira issues
-4. Or ask: "Analyze my LangSmith threads for quality issues"
+2. Run `/instrument-tracing` to add LangSmith tracing to your agents
+3. Run `/analyze-latest` to analyze your LangSmith threads
+4. Run `/issues` to browse and resolve Jira issues
+5. Or ask: "Analyze my LangSmith threads for quality issues"
 
 **Useful Commands**:
 - `geni login` - Re-authenticate
@@ -195,6 +197,21 @@ Display a summary:
 - `geni analyze fetch` - Fetch threads manually
 - `geni issues list` - Browse open Jira issues
 ```
+
+### Step 10: Offer Tracing Instrumentation
+
+Ask the user using AskUserQuestion:
+
+**"Would you like to add LangSmith tracing to your project's agents?"**
+
+| Option | Description |
+|--------|-------------|
+| Yes (Recommended) | Scan your project for LLM-calling code and add tracing |
+| No | Skip — you can always run `/instrument-tracing` later |
+
+If **Yes**: tell the user to run `/instrument-tracing` to start the instrumentation workflow.
+
+If **No**: end the workflow.
 
 ## Error Handling
 
