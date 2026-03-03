@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from cli.auth import CognitoAuthClient
@@ -343,7 +344,7 @@ def configure(
         return
 
     if sync_secrets:
-        print_info("Syncing credentials to AWS Secrets Manager...")
+        print_info("Syncing credentials to cloud backend...")
         try:
             from cli.secrets_manager import SecretsManagerClient, format_sync_results
 
@@ -355,10 +356,27 @@ def configure(
                 print_info("Check your AWS credentials (aws configure)")
                 raise typer.Exit(1)
 
-            # Convert AppConfig to dict for sync
-            config_dict = {
-                "langsmith": {"api_key": config.langsmith.api_key},
-                "aws": {"api_key": config.aws.api_key},
+            # Get user ID from current auth session
+            auth_token = _get_auth_token()
+            if not auth_token:
+                print_error("Not authenticated — run 'geni login' first")
+                raise typer.Exit(1)
+
+            import base64
+
+            payload = auth_token.split(".")[1]
+            payload += "=" * (4 - len(payload) % 4)
+            claims = json.loads(base64.b64decode(payload))
+            user_id = claims["sub"]
+            email = claims.get("email", "")
+
+            # Build full config dict for per-user sync
+            config_dict: dict[str, Any] = {
+                "langsmith": {
+                    "api_key": config.langsmith.api_key,
+                    "project": config.langsmith.project,
+                    "queue": config.langsmith.queue,
+                },
                 "provider": config.provider,
             }
 
@@ -368,6 +386,7 @@ def configure(
                     "email": config.jira.email,
                     "api_token": config.jira.api_token,
                     "project_key": config.jira.project_key,
+                    "issue_type": getattr(config.jira, "issue_type", "Task"),
                 }
 
             if config.notion:
@@ -376,14 +395,19 @@ def configure(
                     "database_id": config.notion.database_id,
                 }
 
-            results = client.sync_all(config_dict)
+            # Sync to per-user paths (Secrets Manager + DynamoDB)
+            results = client.sync_user_config(
+                user_id=user_id,
+                email=email,
+                config=config_dict,
+            )
             console.print(format_sync_results(results))
 
             all_success = all(r.success for r in results)
             if all_success:
-                print_success("\nCredentials synced to AWS Secrets Manager!")
+                print_success("\nCredentials synced to cloud backend!")
             else:
-                print_warning("\nSome credentials failed to sync")
+                print_warning("\nSome syncs failed")
                 raise typer.Exit(1)
 
         except ImportError as e:
@@ -447,7 +471,7 @@ def configure(
                     "database_id": config.notion.database_id,
                 }
 
-            validation_results = validator.validate_all(config_dict)
+            validation_results = validator.validate_all(config_dict, auth_token=_get_auth_token())
 
             all_passed = True
             for result in validation_results:
