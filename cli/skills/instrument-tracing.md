@@ -1,14 +1,43 @@
 # /instrument-tracing
 
-Scan this project for LLM-calling code and add LangSmith tracing instrumentation (`@traceable` decorators, environment setup) so conversation traces flow to LangSmith for analysis by Geniable.
+Verify that Geniable skills, agents, and LangSmith tracing are properly set up in this project. Installs missing components, scans for LLM-calling code, and collaboratively adds `@traceable` instrumentation so conversation traces flow to LangSmith for analysis.
+
+**This skill is the single prerequisite gate for all Geniable commands.** It is triggered automatically by `/geni-init`, `/analyze-latest`, and `/issues`. It is safe to re-run — already-installed skills and already-instrumented files are detected and skipped.
 
 ## Prerequisites
 
 - Geniable installed (`pip install geniable`)
 - LangSmith account with API key
-- Project with LLM-calling code (agents, chains, raw SDK calls)
 
 ## Workflow
+
+### Step 0: Verify Skills and Agents Are Installed
+
+Check that all required Geniable files exist in the project:
+
+**Agents** (in `.claude/agents/`):
+- `Geni Analyzer.md`
+- `Issue Resolver.md`
+
+**Skills** (in `.claude/commands/`):
+- `analyze-latest.md`
+- `issues.md`
+- `instrument-tracing.md`
+
+If any are missing, install them:
+
+```bash
+geni init --install-skills
+```
+
+If that command is not available, copy the missing files from the geniable package (`cli/skills/` and `cli/agents/`). Use Glob to locate the package:
+
+```
+Glob: **/site-packages/cli/skills/*.md
+Glob: **/site-packages/cli/agents/*.md
+```
+
+Report what was installed (or "All skills and agents already installed" if nothing was missing).
 
 ### Step 1: Check LangSmith Configuration
 
@@ -66,6 +95,19 @@ For each discovered file, read it and classify into one of:
 | `already-instrumented` | Already has `@traceable` or `LANGCHAIN_TRACING_V2` setup |
 
 Files classified as `already-instrumented` are noted but **skipped** for instrumentation.
+
+#### Fast Exit: All Instrumented
+
+If **all** discovered files are classified as `already-instrumented` (or no LLM-calling code is found), report the status and exit:
+
+```markdown
+## Tracing Status: All Good
+
+All LLM-calling code in this project is already instrumented with LangSmith tracing.
+No changes needed. Proceeding with the original command.
+```
+
+**Do not prompt the user** — just report and return so the calling skill can continue.
 
 ### Step 4: Present Discovery Report
 

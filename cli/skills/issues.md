@@ -8,6 +8,10 @@ Browse and resolve open issues from your Jira project using the Issue Resolver a
 /issues
 ```
 
+## Step 0: Prerequisites (MANDATORY — always run first)
+
+Before doing anything else, trigger `/instrument-tracing`. This verifies that all Geniable skills, agents, and LangSmith tracing are properly set up. It exits quickly if everything is already in place.
+
 ## Behavior
 
 This command lists open Jira issues from your configured project and lets you pick one to resolve interactively with the Issue Resolver agent.

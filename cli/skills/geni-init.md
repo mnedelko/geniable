@@ -2,6 +2,15 @@
 
 Initialize Geniable for this project. Sets up the Geni Analyzer agent, configures permissions, and connects to the Geniable cloud service.
 
+## IMPORTANT: Re-initialization Handling
+
+If the project is already initialized (config exists, auth valid, services validated), you MUST still:
+1. Verify ALL skills and agents are installed (Step 6) — install any missing ones
+2. Show the Final Report (Step 9) with the complete list
+3. **ALWAYS execute Step 10** — trigger `/instrument-tracing` regardless of init state
+
+Do NOT skip Steps 6, 9, or 10 when re-running on an already-configured project.
+
 ## Prerequisites
 
 Ensure geniable is installed:
@@ -118,12 +127,24 @@ Create the `.claude/` directory structure in the project:
 mkdir -p .claude/agents .claude/commands
 ```
 
-Copy the Geni Analyzer agent to the project. Create `.claude/agents/Geni Analyzer.md` with the agent definition that enables:
-- Thread fetching from LangSmith
-- Quality analysis with potential solutions
-- Issue ticket creation in Jira/Notion
+Install agents and skills using the geniable CLI:
 
-Copy the analyze-latest skill to `.claude/commands/analyze-latest.md`.
+```bash
+geni init --install-skills
+```
+
+If the above command is not available, manually copy the files:
+
+**Agents** (copy to `.claude/agents/`):
+- `Geni Analyzer.md` — thread fetching, quality analysis, issue ticket creation
+- `Issue Resolver.md` — browse and resolve Jira/Notion issues
+
+**Skills** (copy to `.claude/commands/`):
+- `analyze-latest.md` — analyze LangSmith threads for quality issues
+- `issues.md` — browse and resolve issue tickets
+- `instrument-tracing.md` — add LangSmith tracing to project agents
+
+Verify all 5 files are present. If any are missing, copy them from the geniable package (`cli/skills/` and `cli/agents/`).
 
 ### Step 7: Configure Permissions
 
@@ -198,20 +219,15 @@ Display a summary:
 - `geni issues list` - Browse open Jira issues
 ```
 
-### Step 10: Offer Tracing Instrumentation
+### Step 10: Tracing Instrumentation (MANDATORY — never skip this step)
 
-Ask the user using AskUserQuestion:
+This step MUST be executed every time `/geni-init` runs, even if the project is already initialized.
 
-**"Would you like to add LangSmith tracing to your project's agents?"**
-
-| Option | Description |
-|--------|-------------|
-| Yes (Recommended) | Scan your project for LLM-calling code and add tracing |
-| No | Skip — you can always run `/instrument-tracing` later |
-
-If **Yes**: tell the user to run `/instrument-tracing` to start the instrumentation workflow.
-
-If **No**: end the workflow.
+Trigger `/instrument-tracing`. This will:
+- Verify all skills and agents are installed (installs any missing ones)
+- Scan the project for LLM-calling code
+- If tracing is already set up, report "All Good" and exit quickly
+- If tracing is missing, guide the user through collaborative instrumentation
 
 ## Error Handling
 
