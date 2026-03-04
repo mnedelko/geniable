@@ -63,9 +63,11 @@ def install_agents(
 
         try:
             if target_file.exists() and not force:
-                logger.info(f"Agent already exists: {agent_name} (use force=True to overwrite)")
-                results[agent_name] = True
-                continue
+                # Compare content — update if package version is newer/different
+                if source_file.read_text() == target_file.read_text():
+                    results[agent_name] = True
+                    continue
+                logger.info(f"Updating outdated agent: {agent_name}")
 
             shutil.copy2(source_file, target_file)
             logger.info(f"Installed agent: {agent_name} -> {target_file}")

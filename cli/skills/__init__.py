@@ -66,9 +66,11 @@ def install_skills(
 
         try:
             if target_file.exists() and not force:
-                logger.info(f"Skill already exists: {skill_name} (use force=True to overwrite)")
-                results[skill_name] = True
-                continue
+                # Compare content — update if package version is newer/different
+                if source_file.read_text() == target_file.read_text():
+                    results[skill_name] = True
+                    continue
+                logger.info(f"Updating outdated skill: {skill_name}")
 
             shutil.copy2(source_file, target_file)
             logger.info(f"Installed skill: {skill_name} -> {target_file}")
