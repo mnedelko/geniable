@@ -278,6 +278,9 @@ def configure(
     # Require authentication
     require_auth()
 
+    # Auto-update skills/agents if package has newer versions
+    _ensure_skills_installed()
+
     config_manager = ConfigManager()
 
     if reset:
@@ -1111,6 +1114,9 @@ def whoami() -> None:
     Displays the currently logged-in user, token expiry, and
     authentication status.
     """
+    # Auto-update skills/agents if package has newer versions
+    _ensure_skills_installed()
+
     try:
         from cli.auth import get_auth_client
     except ImportError as e:
