@@ -2171,6 +2171,35 @@ operational:
             deps.append(f'    "{d}"')
         deps_str = ",\n".join(deps)
 
+        # Build py-modules list from root-level .py files the scaffold generates
+        py_modules = ["agent", "resilience", "tool_policy"]
+        if self.config.sessions.enabled:
+            py_modules.append("sessions")
+        if self.config.skills.enabled:
+            py_modules.append("capabilities")
+        if self.config.observability.enabled:
+            py_modules.append("observability")
+        if self.config.identity.enabled:
+            py_modules.extend(["brief_packet", "identity_access"])
+        py_modules_str = ", ".join(f'"{m}"' for m in py_modules)
+
+        # Build packages list from directories that contain Python code
+        packages: list[str] = []
+        if self.config.tools.enabled:
+            packages.append('"tools"')
+        packages_str = ", ".join(packages)
+
+        # Setuptools config: explicit py-modules + packages to avoid flat-layout
+        # auto-discovery errors when non-package dirs (identity/, prompts/, skills/) exist
+        setuptools_section = f"""
+[tool.setuptools]
+py-modules = [{py_modules_str}]
+
+[tool.setuptools.packages.find]
+include = [{packages_str}]
+exclude = ["tests*"]
+"""
+
         return f"""\
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
@@ -2194,7 +2223,7 @@ dev = [
     "mypy>=1.0.0",
     "isort>=5.0.0",
 ]
-
+{setuptools_section}
 [tool.black]
 line-length = 100
 target-version = ["py311"]
