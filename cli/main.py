@@ -78,11 +78,48 @@ def _get_auth_token() -> str | None:
 
 
 # Create app
+def _version_callback(value: bool) -> None:
+    if value:
+        from importlib.metadata import version as get_version
+
+        try:
+            pkg_version = get_version("geniable")
+        except Exception:
+            pkg_version = "unknown"
+        console.print(f"Geni v{pkg_version}")
+        from cli.version_check import check_for_updates
+
+        check_for_updates()
+        raise typer.Exit()
+
+
 app = typer.Typer(
     name="geni",
     help="Geni - QA Pipeline for LLM Applications",
     add_completion=False,
 )
+
+
+@app.callback(invoke_without_command=True)
+def app_callback(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        help="Show version and exit.",
+        is_eager=True,
+        callback=_version_callback,
+    ),
+) -> None:
+    """Geni - QA Pipeline for LLM Applications."""
+    from cli.version_check import check_for_updates, should_skip
+
+    if not should_skip():
+        check_for_updates()
+
+    if ctx.invoked_subcommand is None and not version:
+        console.print(ctx.get_help())
 
 # Add subcommands
 app.add_typer(analyze_app, name="analyze", help="Thread analysis commands")
