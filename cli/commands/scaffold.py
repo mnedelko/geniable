@@ -496,8 +496,6 @@ def create() -> None:
     Interactive wizard that collects framework choice, project name,
     and configuration, then generates a complete project structure.
     """
-    _require_auth()
-
     console.print("\n[bold cyan]Agent Project Generator[/bold cyan]")
     console.print("Create a new agent project from a production template.\n")
 

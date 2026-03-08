@@ -95,7 +95,7 @@ def _version_callback(value: bool) -> None:
 
 app = typer.Typer(
     name="geni",
-    help="Geni - QA Pipeline for LLM Applications",
+    help="Geni - AI Agent Framework Harness for building performant, security-hardened agents with evaluation-driven development built in.",
     add_completion=False,
 )
 
@@ -112,7 +112,7 @@ def app_callback(
         callback=_version_callback,
     ),
 ) -> None:
-    """Geni - QA Pipeline for LLM Applications."""
+    """Geni - AI Agent Framework Harness for building performant, security-hardened agents with evaluation-driven development built in."""
     from cli.version_check import check_for_updates, should_skip
 
     if not should_skip():
