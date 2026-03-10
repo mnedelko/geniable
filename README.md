@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="Geniable Logo" width="200">
+</p>
+
 # Geniable
 
 **AI Agent Framework Harness — scaffold performant, security-hardened agents with proven engineering principles and evaluation-driven development built in.**
