@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="assets/logo.png" alt="Geniable Logo" width="200">
-</p>
-
 # Geniable
 
 **AI Agent Framework Harness — scaffold performant, security-hardened agents with proven engineering principles and evaluation-driven development built in.**
@@ -15,6 +11,10 @@ Geniable helps you build AI agents that are performant, maintainable, and secure
 [![PyPI](https://img.shields.io/pypi/v/geniable)](https://pypi.org/project/geniable/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+<p align="center">
+  <img src="assets/logo.png" alt="Geniable Logo" width="200">
+</p>
 
 ---
 
