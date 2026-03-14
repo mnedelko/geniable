@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 class ConfigWizard:
     """Interactive wizard for capturing configuration."""
 
+    TRACING_CHOICES = [
+        {"name": "LangSmith", "value": "langsmith"},
+        {"name": "Langfuse", "value": "langfuse"},
+    ]
+
     INTEGRATION_CHOICES = [
         {"name": "Jira", "value": "jira"},
         {"name": "Notion", "value": "notion"},
@@ -213,9 +218,9 @@ class ConfigWizard:
         console.print(f"[bold]Step 1/{total_steps}: Claude Code Agent Setup[/bold]")
         self._setup_claude_code()
 
-        # Step 2: LangSmith configuration
-        console.print(f"\n[bold]Step 2/{total_steps}: LangSmith Configuration[/bold]")
-        self._capture_langsmith_config()
+        # Step 2: Tracing provider configuration
+        console.print(f"\n[bold]Step 2/{total_steps}: Tracing Provider Configuration[/bold]")
+        self._capture_tracing_config()
 
         # Set hardcoded AWS configuration (users connect to our cloud service)
         self.config["aws"] = self.AWS_CONFIG.copy()
@@ -280,12 +285,24 @@ class ConfigWizard:
         secrets = {}
         config_to_save = {}
 
+        # Trace source
+        config_to_save["trace_source"] = self.config.get("trace_source", "langsmith")
+
         # LangSmith
         if self.config.get("langsmith"):
             secrets["langsmith_api_key"] = self.config["langsmith"].get("api_key", "")
             config_to_save["langsmith"] = {
                 "project": self.config["langsmith"].get("project"),
                 "queue": self.config["langsmith"].get("queue"),
+            }
+
+        # Langfuse
+        if self.config.get("langfuse"):
+            secrets["langfuse_public_key"] = self.config["langfuse"].get("public_key", "")
+            secrets["langfuse_secret_key"] = self.config["langfuse"].get("secret_key", "")
+            config_to_save["langfuse"] = {
+                "host": self.config["langfuse"].get("host"),
+                "dataset": self.config["langfuse"].get("dataset"),
             }
 
         # AWS
@@ -350,7 +367,7 @@ class ConfigWizard:
                 )
 
         except requests.exceptions.RequestException as e:
-            raise RuntimeError(f"Cloud sync failed: {e}")
+            raise RuntimeError(f"Cloud sync failed: {e}") from e
 
     def _validate_services(self) -> None:
         """Validate all configured services."""
@@ -408,6 +425,30 @@ class ConfigWizard:
 
         return "none"
 
+    def _capture_tracing_config(self) -> None:
+        """Capture tracing provider configuration (LangSmith or Langfuse)."""
+        provider = questionary.select(
+            "Select your tracing provider:",
+            choices=[c["name"] for c in self.TRACING_CHOICES],
+        ).ask()
+
+        if provider is None:
+            raise KeyboardInterrupt("Wizard cancelled")
+
+        # Map display name to value
+        trace_source = "langsmith"
+        for c in self.TRACING_CHOICES:
+            if c["name"] == provider:
+                trace_source = c["value"]
+                break
+
+        self.config["trace_source"] = trace_source
+
+        if trace_source == "langsmith":
+            self._capture_langsmith_config()
+        else:
+            self._capture_langfuse_config()
+
     def _capture_langsmith_config(self) -> None:
         """Capture LangSmith configuration."""
         api_key = questionary.password(
@@ -441,6 +482,51 @@ class ConfigWizard:
             "api_key": api_key,
             "project": project,
             "queue": queue,
+        }
+
+    def _capture_langfuse_config(self) -> None:
+        """Capture Langfuse configuration."""
+        public_key = questionary.password(
+            "Langfuse Public Key:",
+            validate=lambda x: x.startswith("pk-lf-")
+            or "Public key should start with 'pk-lf-'",
+        ).ask()
+
+        if public_key is None:
+            raise KeyboardInterrupt("Wizard cancelled")
+
+        secret_key = questionary.password(
+            "Langfuse Secret Key:",
+            validate=lambda x: x.startswith("sk-lf-")
+            or "Secret key should start with 'sk-lf-'",
+        ).ask()
+
+        if secret_key is None:
+            raise KeyboardInterrupt("Wizard cancelled")
+
+        host = questionary.text(
+            "Langfuse Host URL:",
+            default="https://cloud.langfuse.com",
+            validate=lambda x: validate_url(x) or "Invalid URL format",
+        ).ask()
+
+        if host is None:
+            raise KeyboardInterrupt("Wizard cancelled")
+
+        dataset = questionary.text(
+            "Langfuse Dataset Name (for trace grouping):",
+            default="annotations",
+            validate=lambda x: len(x) > 0 or "Dataset name is required",
+        ).ask()
+
+        if dataset is None:
+            raise KeyboardInterrupt("Wizard cancelled")
+
+        self.config["langfuse"] = {
+            "public_key": public_key,
+            "secret_key": secret_key,
+            "host": host.rstrip("/"),
+            "dataset": dataset,
         }
 
     def _capture_jira_credentials(self) -> None:

@@ -139,7 +139,7 @@ def init(
 
     This command will:
     1. Set up Claude Code agent integration (CLAUDE.md via /init)
-    2. Collect LangSmith credentials and project settings
+    2. Select tracing provider (LangSmith or Langfuse) and collect credentials
     3. Configure issue tracker integration (Jira/Notion)
     4. Validate service connections (optional)
     5. Sync credentials to AWS Secrets Manager (required)
@@ -190,8 +190,13 @@ def init(
         if not state_file.exists():
             import json
 
+            trace_source = config.get("trace_source", "langsmith")
+            if trace_source == "langfuse":
+                project_name = config.get("langfuse", {}).get("dataset", "default")
+            else:
+                project_name = config.get("langsmith", {}).get("project", "default")
             initial_state = {
-                "project": config.get("langsmith", {}).get("project", "default"),
+                "project": project_name,
                 "processed_threads": {},
                 "last_poll": None,
             }
