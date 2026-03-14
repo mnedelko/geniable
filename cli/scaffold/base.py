@@ -2145,7 +2145,7 @@ operational:
   max_iterations: 10
   timeout_seconds: 120
   log_level: "INFO"
-{self._render_langsmith_config_yaml()}{self._render_session_config_yaml()}{self._render_identity_config_yaml()}{self._render_skills_config_yaml()}{self._render_tools_config_yaml()}{self._render_observability_config_yaml()}"""
+{self._render_tracing_config_yaml()}{self._render_session_config_yaml()}{self._render_identity_config_yaml()}{self._render_skills_config_yaml()}{self._render_tools_config_yaml()}{self._render_observability_config_yaml()}"""
 
     def render_pyproject_toml(self) -> str:
         deps = ['    "pydantic>=2.0.0"', '    "pyyaml>=6.0.0"']
@@ -2161,8 +2161,12 @@ operational:
         if "ollama" in providers:
             deps.append('    "ollama>=0.4.0"')
 
-        if self.config.langsmith.enabled:
-            deps.append('    "langsmith>=0.1.0"')
+        if self.config.tracing.enabled:
+            if self.config.tracing.provider == "langsmith":
+                deps.append('    "langsmith>=0.1.0"')
+            elif self.config.tracing.provider == "langfuse":
+                deps.append('    "langfuse>=2.0.0"')
+                deps.append('    "python-dotenv>=1.0.0"')
 
         if self.config.observability.enabled:
             deps.append('    "watchtower>=3.0.0"')
@@ -2339,7 +2343,7 @@ This project includes a tool policy module (`tool_policy.py`) that provides:
 - **Sub-agent restrictions** — hardcoded deny list prevents sub-agents from accessing orchestration tools
 
 Configure tool access in `config.yaml` under the `tools` section.
-{self._render_readme_langsmith()}{self._render_readme_session_persistence()}{self._render_readme_skills()}{self._render_readme_tools()}{self._render_readme_observability()}
+{self._render_readme_tracing()}{self._render_readme_session_persistence()}{self._render_readme_skills()}{self._render_readme_tools()}{self._render_readme_observability()}
 ## Design Principles
 
 This project is built on 20 agent engineering principles for production systems:
@@ -2361,7 +2365,7 @@ Key settings:
 - **tools.profile** — Tool access level (minimal/coding/full)
 - **tools.deny** — Explicit deny list (always wins over allow)
 - **tools.sub_agent_restrictions** — Enable sub-agent tool restrictions
-- **operational.max_iterations** — Tool loop iteration limit{self._render_readme_langsmith_config_line()}{self._render_readme_session_config_line()}{self._render_readme_skills_config_line()}{self._render_readme_tools_config_line()}{self._render_readme_observability_config_line()}
+- **operational.max_iterations** — Tool loop iteration limit{self._render_readme_tracing_config_line()}{self._render_readme_session_config_line()}{self._render_readme_skills_config_line()}{self._render_readme_tools_config_line()}{self._render_readme_observability_config_line()}
 """
 
     def render_makefile(self) -> str:
@@ -2430,15 +2434,25 @@ clean:
                 "",
             ])
 
-        if self.config.langsmith.enabled:
-            lines.extend([
-                "# LangSmith Tracing (Principle 16)",
-                "# LANGCHAIN_TRACING_V2 is set automatically by the --dev flag",
-                "LANGCHAIN_API_KEY=lsv2_...",
-                f"LANGCHAIN_PROJECT={self.config.langsmith.project}",
-                "# LANGCHAIN_ENDPOINT=https://api.smith.langchain.com",
-                "",
-            ])
+        if self.config.tracing.enabled:
+            if self.config.tracing.provider == "langsmith":
+                lines.extend([
+                    "# LangSmith Tracing (Principle 16)",
+                    "# LANGCHAIN_TRACING_V2 is set automatically by the --dev flag",
+                    "LANGCHAIN_API_KEY=lsv2_...",
+                    f"LANGCHAIN_PROJECT={self.config.tracing.project}",
+                    "# LANGCHAIN_ENDPOINT=https://api.smith.langchain.com",
+                    "",
+                ])
+            elif self.config.tracing.provider == "langfuse":
+                lines.extend([
+                    "# Langfuse Tracing (Principle 16)",
+                    "# Keys are loaded via python-dotenv when --dev flag is used",
+                    "LANGFUSE_PUBLIC_KEY=pk-lf-...",
+                    "LANGFUSE_SECRET_KEY=sk-lf-...",
+                    "LANGFUSE_HOST=https://cloud.langfuse.com",
+                    "",
+                ])
 
         if self.config.observability.enabled:
             lines.extend([
@@ -3672,12 +3686,19 @@ def run_agent_with_session(
     def _render_main_block(self) -> str:
         """Render the if __name__ == '__main__' block.
 
-        When LangSmith is enabled, adds --dev flag parsing that sets
-        LANGCHAIN_TRACING_V2=true at runtime.
+        When tracing is enabled, adds --dev flag parsing that activates
+        the configured tracing provider at runtime.
         When sessions are enabled, calls run_agent_with_session() instead.
         """
         run_fn = "run_agent_with_session" if self.config.sessions.enabled else "run_agent"
-        if self.config.langsmith.enabled:
+        if self.config.tracing.enabled:
+            if self.config.tracing.provider == "langfuse":
+                dev_block = '''\
+        from dotenv import load_dotenv
+        load_dotenv()  # Loads LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_HOST'''
+            else:
+                dev_block = '''\
+        os.environ["LANGCHAIN_TRACING_V2"] = "true"'''
             return f'''\
 if __name__ == "__main__":
     import os
@@ -3685,7 +3706,7 @@ if __name__ == "__main__":
     _dev = "--dev" in sys.argv
     _args = [a for a in sys.argv[1:] if a != "--dev"]
     if _dev:
-        os.environ["LANGCHAIN_TRACING_V2"] = "true"
+{dev_block}
     if _args:
         user_query = " ".join(_args)
         print(f"Query: {{user_query}}")
@@ -3717,8 +3738,27 @@ if __name__ == "__main__":
 
     def _render_test_tracing(self) -> str:
         """Render tracing test class for generated test_agent.py, or empty string."""
-        if not self.config.langsmith.enabled:
+        if not self.config.tracing.enabled:
             return ""
+        if self.config.tracing.provider == "langfuse":
+            return """
+
+class TestTracingSetup:
+    \"\"\"Verify Langfuse tracing is configured.\"\"\"
+
+    def test_agent_has_observe_decorator(self):
+        source = AGENT_FILE.read_text()
+        assert "@observe" in source
+
+    def test_agent_imports_langfuse(self):
+        source = AGENT_FILE.read_text()
+        assert "from langfuse.decorators" in source
+
+    def test_agent_has_dev_flag(self):
+        \"\"\"Tracing is activated via --dev flag.\"\"\"
+        source = AGENT_FILE.read_text()
+        assert "--dev" in source
+"""
         return """
 
 class TestTracingSetup:
@@ -3739,16 +3779,58 @@ class TestTracingSetup:
         assert "LANGCHAIN_TRACING_V2" in source
 """
 
-    def _render_readme_langsmith_config_line(self) -> str:
+    def _render_readme_tracing_config_line(self) -> str:
         """Render the tracing config bullet for README, or empty string."""
-        if not self.config.langsmith.enabled:
+        if not self.config.tracing.enabled:
             return ""
+        if self.config.tracing.provider == "langfuse":
+            return "\n- **tracing.project** — Langfuse project name for trace grouping"
         return "\n- **tracing.project** — LangSmith project name for trace grouping"
 
-    def _render_readme_langsmith(self) -> str:
+    # Backward compatibility alias
+    _render_readme_langsmith_config_line = _render_readme_tracing_config_line
+
+    def _render_readme_tracing(self) -> str:
         """Render the Observability section for README, or empty string."""
-        if not self.config.langsmith.enabled:
+        if not self.config.tracing.enabled:
             return ""
+        if self.config.tracing.provider == "langfuse":
+            return """
+## Observability (Principle 16)
+
+This project includes Langfuse tracing for production observability.
+All agent invocations are traced and visible in the
+[Langfuse](https://cloud.langfuse.com) dashboard.
+
+Tracing is **opt-in at runtime** via the `--dev` flag to avoid overhead in production.
+
+### Setup
+
+1. Get your API keys from [Langfuse](https://cloud.langfuse.com)
+2. Set environment variables in `.env`:
+   ```
+   LANGFUSE_PUBLIC_KEY=pk-lf-your_key_here
+   LANGFUSE_SECRET_KEY=sk-lf-your_key_here
+   LANGFUSE_HOST=https://cloud.langfuse.com
+   ```
+
+### Usage
+
+```bash
+# Run with tracing enabled (dev/debug)
+python agent.py --dev "your query here"
+
+# Run without tracing (production)
+python agent.py "your query here"
+```
+
+The `--dev` flag loads `.env` via `python-dotenv`, making Langfuse keys available.
+You can also set these env vars directly for CI/CD or always-on tracing.
+
+### Configuration
+
+Edit `config.yaml` under the `tracing` section.
+"""
         return f"""
 ## Observability (Principle 16)
 
@@ -3764,7 +3846,7 @@ Tracing is **opt-in at runtime** via the `--dev` flag to avoid overhead in produ
 2. Set environment variables in `.env`:
    ```
    LANGCHAIN_API_KEY=lsv2_your_key_here
-   LANGCHAIN_PROJECT={self.config.langsmith.project}
+   LANGCHAIN_PROJECT={self.config.tracing.project}
    ```
 
 ### Usage
@@ -3785,18 +3867,33 @@ You can also set this env var directly for CI/CD or always-on tracing.
 Edit `config.yaml` under the `tracing` section.
 """
 
-    def _render_langsmith_config_yaml(self) -> str:
+    # Backward compatibility alias
+    _render_readme_langsmith = _render_readme_tracing
+
+    def _render_tracing_config_yaml(self) -> str:
         """Render the tracing section of config.yaml, or empty string."""
-        if not self.config.langsmith.enabled:
+        if not self.config.tracing.enabled:
             return ""
+        if self.config.tracing.provider == "langfuse":
+            return f"""
+tracing:
+  enabled: true
+  provider: "langfuse"
+  project: "{self.config.tracing.project}"
+  # Activated at runtime with --dev flag (loads .env via python-dotenv)
+  # host: "https://cloud.langfuse.com"
+"""
         return f"""
 tracing:
   enabled: true
   provider: "langsmith"
-  project: "{self.config.langsmith.project}"
+  project: "{self.config.tracing.project}"
   # Activated at runtime with --dev flag (or LANGCHAIN_TRACING_V2=true)
   # endpoint: "https://api.smith.langchain.com"
 """
+
+    # Backward compatibility alias
+    _render_langsmith_config_yaml = _render_tracing_config_yaml
 
     def _render_identity_config_yaml(self) -> str:
         """Render the identity section of config.yaml, or empty string."""

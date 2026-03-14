@@ -38,11 +38,18 @@ class ToolGovernanceConfig:
 
 
 @dataclass
-class LangSmithConfig:
-    """Configuration for LangSmith tracing (Principle 16: Observability)."""
+class TracingConfig:
+    """Configuration for tracing (Principle 16: Observability).
+    Supports LangSmith and Langfuse providers.
+    """
 
     enabled: bool = False
+    provider: str = ""  # "langsmith" | "langfuse"
     project: str = ""  # defaults to project_name at generation time
+
+
+# Backward compatibility alias
+LangSmithConfig = TracingConfig
 
 
 @dataclass
@@ -116,11 +123,27 @@ class ScaffoldConfig:
     fallback_models: list[ProviderModel] = field(default_factory=list)
     identity: IdentityLayerConfig = field(default_factory=IdentityLayerConfig)
     tool_governance: ToolGovernanceConfig = field(default_factory=ToolGovernanceConfig)
-    langsmith: LangSmithConfig = field(default_factory=LangSmithConfig)
+    tracing: TracingConfig = field(default_factory=TracingConfig)
+    langsmith: TracingConfig | None = field(default=None, repr=False)
     sessions: SessionConfig = field(default_factory=SessionConfig)
     skills: SkillsConfig = field(default_factory=SkillsConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
+
+    def __post_init__(self) -> None:
+        """Handle backward-compatible 'langsmith' kwarg.
+
+        If caller passes langsmith= instead of tracing=, merge it into tracing.
+        After merging, langsmith is kept as an alias to tracing for attribute access.
+        """
+        if self.langsmith is not None and not self.tracing.enabled and self.langsmith.enabled:
+            # Old-style caller: ScaffoldConfig(..., langsmith=LangSmithConfig(...))
+            # Backfill provider if not set (old LangSmithConfig had no provider)
+            if not self.langsmith.provider:
+                self.langsmith.provider = "langsmith"
+            self.tracing = self.langsmith
+        # Always keep langsmith as alias for tracing (backward compat for config.langsmith access)
+        self.langsmith = self.tracing
 
     def validate(self) -> None:
         """Validate configuration values."""

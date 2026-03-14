@@ -74,6 +74,23 @@ class ConfigManager:
         if os.environ.get("LANGSMITH_QUEUE"):
             config["langsmith"]["queue"] = os.environ["LANGSMITH_QUEUE"]
 
+        # Trace source override
+        if os.environ.get("TRACE_SOURCE"):
+            config["trace_source"] = os.environ["TRACE_SOURCE"]
+
+        # Langfuse overrides
+        if os.environ.get("LANGFUSE_PUBLIC_KEY") or config.get("langfuse"):
+            if "langfuse" not in config:
+                config["langfuse"] = {}
+            if os.environ.get("LANGFUSE_PUBLIC_KEY"):
+                config["langfuse"]["public_key"] = os.environ["LANGFUSE_PUBLIC_KEY"]
+            if os.environ.get("LANGFUSE_SECRET_KEY"):
+                config["langfuse"]["secret_key"] = os.environ["LANGFUSE_SECRET_KEY"]
+            if os.environ.get("LANGFUSE_HOST"):
+                config["langfuse"]["host"] = os.environ["LANGFUSE_HOST"]
+            if os.environ.get("LANGFUSE_DATASET"):
+                config["langfuse"]["dataset"] = os.environ["LANGFUSE_DATASET"]
+
         # AWS overrides
         if "aws" not in config:
             config["aws"] = {}
@@ -152,10 +169,18 @@ class ConfigManager:
 # Geniable Configuration
 # Created by: geni configure
 
+trace_source: "langsmith"  # or "langfuse"
+
 langsmith:
   api_key: "ls_your_api_key"
   project: "insights-agent-v2"
   queue: "quality-review"
+
+# langfuse:
+#   public_key: "pk-lf-..."
+#   secret_key: "sk-lf-..."
+#   host: "https://cloud.langfuse.com"
+#   dataset: "annotations"
 
 aws:
   region: "ap-southeast-2"
@@ -248,6 +273,11 @@ defaults:
             "",
         ]
 
+        # Trace source
+        trace_source = config.get("trace_source", "langsmith")
+        lines.append(f'trace_source: "{trace_source}"')
+        lines.append("")
+
         # LangSmith section
         if "langsmith" in config:
             lines.extend(
@@ -256,6 +286,19 @@ defaults:
                     f'  api_key: "{config["langsmith"]["api_key"]}"',
                     f'  project: "{config["langsmith"]["project"]}"',
                     f'  queue: "{config["langsmith"]["queue"]}"',
+                    "",
+                ]
+            )
+
+        # Langfuse section
+        if "langfuse" in config:
+            lines.extend(
+                [
+                    "langfuse:",
+                    f'  public_key: "{config["langfuse"]["public_key"]}"',
+                    f'  secret_key: "{config["langfuse"]["secret_key"]}"',
+                    f'  host: "{config["langfuse"].get("host", "https://cloud.langfuse.com")}"',
+                    f'  dataset: "{config["langfuse"].get("dataset", "")}"',
                     "",
                 ]
             )

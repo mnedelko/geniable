@@ -1,21 +1,21 @@
 # Geniable
 
-**AI Agent Framework Harness — scaffold performant, security-hardened agents with proven engineering principles and evaluation-driven development built in.**
+<p align="center">
+  <img src="assets/logo.png" alt="Geniable Logo" width="200">
+</p>
 
-Geniable helps you build AI agents that are performant, maintainable, and secure in production. It provides:
+**Your out-of-the-box AI workbench for performant, security-hardened agents with proven engineering principles and evaluation-driven development built in.**
+
+Geniable is your complete AI agent workbench. It provides:
 
 - **`geni new`** — Generate production-ready agent projects grounded in 20 architectural principles. Choose your framework (LangGraph, Strands, Pi), model provider (Bedrock, OpenAI, Google, Ollama), and get a fully wired project with identity layers, tool governance, observability, model resilience, and graceful degradation built in.
 
 - **QA Pipeline** — An out-of-the-box evaluation loop that connects to your LangSmith annotation queue, runs cloud-hosted evaluations against conversation threads, detects issues, and creates tickets in Jira or Notion automatically — enabling evaluation-driven development and experimentation from day one.
 
+
 [![PyPI](https://img.shields.io/pypi/v/geniable)](https://pypi.org/project/geniable/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-
-<p align="center">
-  <img src="assets/logo.png" alt="Geniable Logo" width="200">
-</p>
-
 ---
 
 ## Features

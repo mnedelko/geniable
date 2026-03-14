@@ -19,6 +19,20 @@ class LangSmithConfig(BaseModel):
     queue: str = Field(..., description="Annotation queue name")
 
 
+class LangfuseConfig(BaseModel):
+    """Langfuse tracing configuration."""
+
+    public_key: str = Field(default="", description="Langfuse public key")
+    secret_key: str = Field(default="", description="Langfuse secret key")
+    host: str = Field(
+        default="https://cloud.langfuse.com", description="Langfuse host URL"
+    )
+    dataset: str = Field(
+        default="",
+        description="Langfuse dataset name (equivalent of annotation queue)",
+    )
+
+
 class AWSConfig(BaseModel):
     """AWS service configuration."""
 
@@ -106,7 +120,14 @@ class AppConfig(BaseModel):
     2. Environment variables (override config file)
     """
 
+    trace_source: Literal["langsmith", "langfuse"] = Field(
+        default="langsmith", description="Trace data source"
+    )
     langsmith: LangSmithConfig
+    langfuse: LangfuseConfig | None = Field(
+        default=None,
+        description="Langfuse config (required if trace_source=langfuse)",
+    )
     aws: AWSConfig
     provider: Literal["jira", "notion", "none"] = Field(
         default="jira", description="Issue tracking provider"
@@ -155,10 +176,17 @@ class AppConfig(BaseModel):
 
         json_schema_extra = {
             "example": {
+                "trace_source": "langsmith",
                 "langsmith": {
                     "api_key": "ls_xxx",
                     "project": "insights-agent-v2",
                     "queue": "quality-review",
+                },
+                "langfuse": {
+                    "public_key": "pk-lf-xxx",
+                    "secret_key": "sk-lf-xxx",
+                    "host": "https://cloud.langfuse.com",
+                    "dataset": "annotations",
                 },
                 "aws": {
                     "region": "us-east-1",

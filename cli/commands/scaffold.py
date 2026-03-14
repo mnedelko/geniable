@@ -9,11 +9,11 @@ from rich.console import Console
 from cli.output_formatter import print_error, print_info, print_success
 from cli.scaffold import (
     IdentityLayerConfig,
-    LangSmithConfig,
     ObservabilityConfig,
     SessionConfig,
     ToolGovernanceConfig,
     ToolsConfig,
+    TracingConfig,
 )
 
 console = Console()
@@ -381,32 +381,51 @@ def _ask_tool_governance() -> ToolGovernanceConfig:
     )
 
 
-def _ask_langsmith(project_name: str) -> LangSmithConfig:
-    """Ask user about LangSmith tracing configuration (Principle 16).
+def _ask_tracing(project_name: str) -> TracingConfig:
+    """Ask user about tracing configuration (Principle 16).
 
     Returns:
-        LangSmithConfig with user selections.
+        TracingConfig with user selections.
     """
-    enable = questionary.confirm(
-        "Enable LangSmith tracing? (Principle 16: Observability)",
-        default=True,
+    TRACING_CHOICES = [
+        questionary.Choice(
+            title="LangSmith  — LangChain's observability platform",
+            value="langsmith",
+        ),
+        questionary.Choice(
+            title="Langfuse   — Open-source LLM observability",
+            value="langfuse",
+        ),
+        questionary.Choice(
+            title="None       — Skip tracing",
+            value="none",
+        ),
+    ]
+
+    provider = questionary.select(
+        "Tracing provider (Principle 16: Observability):",
+        choices=TRACING_CHOICES,
     ).ask()
 
-    if enable is None:
+    if provider is None:
         raise typer.Abort()
 
-    if not enable:
-        return LangSmithConfig(enabled=False)
+    if provider == "none":
+        return TracingConfig(enabled=False)
 
     project = questionary.text(
-        "LangSmith project name:",
+        f"{provider.capitalize()} project name:",
         default=project_name,
     ).ask()
 
     if project is None:
         raise typer.Abort()
 
-    return LangSmithConfig(enabled=True, project=project)
+    return TracingConfig(enabled=True, provider=provider, project=project)
+
+
+# Backward compatibility alias
+_ask_langsmith = _ask_tracing
 
 
 MAINTENANCE_MODE_CHOICES = [
@@ -599,9 +618,9 @@ def create() -> None:
     if output_dir is None:
         raise typer.Abort()
 
-    # 11. LangSmith tracing (Principle 16)
-    console.print("\n[cyan]Observability (Principle 16: LangSmith Tracing)[/cyan]")
-    langsmith_config = _ask_langsmith(project_name)
+    # 11. Tracing (Principle 16)
+    console.print("\n[cyan]Tracing (Principle 16: Observability)[/cyan]")
+    tracing_config = _ask_tracing(project_name)
 
     # 12. Session persistence (Principle 11)
     console.print("\n[cyan]Session Persistence (Principle 11: Conversation State)[/cyan]")
@@ -626,7 +645,7 @@ def create() -> None:
         output_dir=output_dir,
         identity=identity_config,
         tool_governance=tool_governance_config,
-        langsmith=langsmith_config,
+        tracing=tracing_config,
         sessions=session_config,
         tools=tools_config,
         observability=observability_config,

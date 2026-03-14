@@ -479,11 +479,15 @@ def create_agent_config() -> dict[str, Any]:
 """
 
     def render_section_8_entrypoint(self) -> str:
-        langsmith_import = ""
-        langsmith_decorator = ""
-        if self.config.langsmith.enabled:
-            langsmith_import = "from langsmith import traceable\n\n"
-            langsmith_decorator = f'@traceable(name="{self.config.project_name}")\n'
+        tracing_import = ""
+        tracing_decorator = ""
+        if self.config.tracing.enabled:
+            if self.config.tracing.provider == "langsmith":
+                tracing_import = "from langsmith import traceable\n\n"
+                tracing_decorator = f'@traceable(name="{self.config.project_name}")\n'
+            elif self.config.tracing.provider == "langfuse":
+                tracing_import = "from langfuse.decorators import observe\n\n"
+                tracing_decorator = f'@observe(name="{self.config.project_name}")\n'
         session_wrapper = self._render_session_wrapper()
         main_block = self._render_main_block()
 
@@ -501,7 +505,7 @@ def create_agent_config() -> dict[str, Any]:
 # =============================================================================
 # 8. ENTRY POINT
 # =============================================================================
-{_principle_comments(8)}{langsmith_import}{langsmith_decorator}def run_agent(query: str, context: dict | None = None) -> str:
+{_principle_comments(8)}{tracing_import}{tracing_decorator}def run_agent(query: str, context: dict | None = None) -> str:
     \"\"\"Run the agent with a query string.
 
     In a full Pi deployment, this would be invoked by the gateway

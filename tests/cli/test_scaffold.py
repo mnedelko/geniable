@@ -18,6 +18,7 @@ from cli.scaffold import (
     SkillsConfig,
     ToolGovernanceConfig,
     ToolsConfig,
+    TracingConfig,
 )
 
 # ---------------------------------------------------------------------------
@@ -127,6 +128,18 @@ def _make_langsmith_config(
         framework=framework,
         tmp_path=tmp_path,
         langsmith=LangSmithConfig(enabled=True, project="test-project"),
+    )
+
+
+def _make_langfuse_config(
+    framework: str = "langgraph",
+    tmp_path: Path | None = None,
+) -> ScaffoldConfig:
+    """Create a config with Langfuse tracing enabled."""
+    return _make_config(
+        framework=framework,
+        tmp_path=tmp_path,
+        langsmith=TracingConfig(enabled=True, provider="langfuse", project="test-project"),
     )
 
 
@@ -1545,23 +1558,35 @@ class TestLangSmithAgentIntegration:
 
 
 class TestWizardLangSmithFlow:
-    """Test _ask_langsmith with mocked questionary."""
+    """Test _ask_tracing (aliased as _ask_langsmith) with mocked questionary."""
 
     def test_langsmith_enabled(self) -> None:
         from cli.commands.scaffold import _ask_langsmith
 
         with patch("cli.commands.scaffold.questionary") as mock_q:
-            mock_q.confirm.return_value.ask.return_value = True
+            mock_q.select.return_value.ask.return_value = "langsmith"
             mock_q.text.return_value.ask.return_value = "my-project"
             result = _ask_langsmith("my-project")
             assert result.enabled is True
+            assert result.provider == "langsmith"
+            assert result.project == "my-project"
+
+    def test_langfuse_enabled(self) -> None:
+        from cli.commands.scaffold import _ask_langsmith
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.select.return_value.ask.return_value = "langfuse"
+            mock_q.text.return_value.ask.return_value = "my-project"
+            result = _ask_langsmith("my-project")
+            assert result.enabled is True
+            assert result.provider == "langfuse"
             assert result.project == "my-project"
 
     def test_langsmith_disabled(self) -> None:
         from cli.commands.scaffold import _ask_langsmith
 
         with patch("cli.commands.scaffold.questionary") as mock_q:
-            mock_q.confirm.return_value.ask.return_value = False
+            mock_q.select.return_value.ask.return_value = "none"
             result = _ask_langsmith("my-project")
             assert result.enabled is False
 
@@ -1571,7 +1596,7 @@ class TestWizardLangSmithFlow:
         from cli.commands.scaffold import _ask_langsmith
 
         with patch("cli.commands.scaffold.questionary") as mock_q:
-            mock_q.confirm.return_value.ask.return_value = None
+            mock_q.select.return_value.ask.return_value = None
             with pytest.raises(Abort):
                 _ask_langsmith("my-project")
 
@@ -1581,10 +1606,204 @@ class TestWizardLangSmithFlow:
         from cli.commands.scaffold import _ask_langsmith
 
         with patch("cli.commands.scaffold.questionary") as mock_q:
-            mock_q.confirm.return_value.ask.return_value = True
+            mock_q.select.return_value.ask.return_value = "langsmith"
             mock_q.text.return_value.ask.return_value = None
             with pytest.raises(Abort):
                 _ask_langsmith("my-project")
+
+
+# ---------------------------------------------------------------------------
+# Langfuse .env.example
+# ---------------------------------------------------------------------------
+
+
+class TestLangfuseEnvExample:
+    """Test .env.example includes Langfuse vars when enabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_env_has_langfuse_vars_when_enabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_langfuse_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        env = (output_path / ".env.example").read_text()
+        assert "LANGFUSE_PUBLIC_KEY" in env
+        assert "LANGFUSE_SECRET_KEY" in env
+        assert "LANGFUSE_HOST" in env
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_env_no_langchain_vars_when_langfuse(self, framework: str, tmp_path: Path) -> None:
+        config = _make_langfuse_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        env = (output_path / ".env.example").read_text()
+        assert "LANGCHAIN_API_KEY" not in env
+        assert "LANGCHAIN_TRACING_V2" not in env
+
+
+# ---------------------------------------------------------------------------
+# Langfuse config.yaml
+# ---------------------------------------------------------------------------
+
+
+class TestLangfuseConfigYaml:
+    """Test config.yaml includes tracing section for Langfuse."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_config_yaml_has_langfuse_tracing(self, framework: str, tmp_path: Path) -> None:
+        config = _make_langfuse_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        config_yaml = (output_path / "config.yaml").read_text()
+        assert "tracing:" in config_yaml
+        assert 'provider: "langfuse"' in config_yaml
+        assert 'project: "test-project"' in config_yaml
+
+
+# ---------------------------------------------------------------------------
+# Langfuse pyproject.toml
+# ---------------------------------------------------------------------------
+
+
+class TestLangfusePyproject:
+    """Test pyproject.toml includes langfuse dep when enabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_pyproject_has_langfuse_when_enabled(self, framework: str, tmp_path: Path) -> None:
+        config = _make_langfuse_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        pyproject = (output_path / "pyproject.toml").read_text()
+        assert "langfuse" in pyproject
+        assert "python-dotenv" in pyproject
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_pyproject_no_langsmith_when_langfuse(self, framework: str, tmp_path: Path) -> None:
+        config = _make_langfuse_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        pyproject = (output_path / "pyproject.toml").read_text()
+        assert "langsmith" not in pyproject
+
+
+# ---------------------------------------------------------------------------
+# Langfuse agent.py integration
+# ---------------------------------------------------------------------------
+
+
+class TestLangfuseAgentIntegration:
+    """Test agent.py contains @observe and langfuse import when Langfuse enabled."""
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_has_observe_when_langfuse(self, framework: str, tmp_path: Path) -> None:
+        config = _make_langfuse_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        assert "@observe" in agent_source
+        assert "from langfuse.decorators import observe" in agent_source
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_no_traceable_when_langfuse(self, framework: str, tmp_path: Path) -> None:
+        config = _make_langfuse_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        assert "@traceable" not in agent_source
+        assert "from langsmith" not in agent_source
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_py_valid_python_with_langfuse(self, framework: str, tmp_path: Path) -> None:
+        """Verify generated agent.py with Langfuse is syntactically valid Python."""
+        config = _make_langfuse_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        ast.parse(agent_source)
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_readme_has_observability_when_langfuse(self, framework: str, tmp_path: Path) -> None:
+        config = _make_langfuse_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        readme = (output_path / "README.md").read_text()
+        assert "Observability" in readme
+        assert "Langfuse" in readme
+
+    @pytest.mark.parametrize("framework", FRAMEWORKS)
+    def test_agent_has_dev_flag_when_langfuse(self, framework: str, tmp_path: Path) -> None:
+        config = _make_langfuse_config(framework, tmp_path)
+        generator = ScaffoldGenerator(config)
+        output_path = generator.generate()
+
+        agent_source = (output_path / "agent.py").read_text()
+        assert '"--dev"' in agent_source
+        assert "load_dotenv" in agent_source
+
+
+# ---------------------------------------------------------------------------
+# Wizard Langfuse flow
+# ---------------------------------------------------------------------------
+
+
+class TestWizardLangfuseFlow:
+    """Test _ask_tracing with Langfuse selection."""
+
+    def test_langfuse_enabled(self) -> None:
+        from cli.commands.scaffold import _ask_tracing
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.select.return_value.ask.return_value = "langfuse"
+            mock_q.text.return_value.ask.return_value = "my-project"
+            result = _ask_tracing("my-project")
+            assert result.enabled is True
+            assert result.provider == "langfuse"
+            assert result.project == "my-project"
+
+    def test_tracing_none_selected(self) -> None:
+        from cli.commands.scaffold import _ask_tracing
+
+        with patch("cli.commands.scaffold.questionary") as mock_q:
+            mock_q.select.return_value.ask.return_value = "none"
+            result = _ask_tracing("my-project")
+            assert result.enabled is False
+
+
+# ---------------------------------------------------------------------------
+# TracingConfig dataclass
+# ---------------------------------------------------------------------------
+
+
+class TestTracingConfig:
+    """Test TracingConfig dataclass."""
+
+    def test_defaults(self) -> None:
+        config = TracingConfig()
+        assert config.enabled is False
+        assert config.provider == ""
+        assert config.project == ""
+
+    def test_langsmith_provider(self) -> None:
+        config = TracingConfig(enabled=True, provider="langsmith", project="my-proj")
+        assert config.enabled is True
+        assert config.provider == "langsmith"
+
+    def test_langfuse_provider(self) -> None:
+        config = TracingConfig(enabled=True, provider="langfuse", project="my-proj")
+        assert config.enabled is True
+        assert config.provider == "langfuse"
+
+    def test_backward_compat_alias(self) -> None:
+        """LangSmithConfig should be an alias for TracingConfig."""
+        assert LangSmithConfig is TracingConfig
 
 
 # ---------------------------------------------------------------------------

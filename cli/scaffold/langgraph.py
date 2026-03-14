@@ -366,24 +366,33 @@ def create_agent():
 """
 
     def render_section_8_entrypoint(self) -> str:
-        langsmith_import = ""
-        langsmith_decorator = ""
-        langsmith_comment = ""
-        if self.config.langsmith.enabled:
-            langsmith_import = "from langsmith import traceable\n\n"
-            langsmith_decorator = f'@traceable(name="{self.config.project_name}")\n'
-            langsmith_comment = (
-                "\n# LangSmith tracing: LangChain calls are auto-traced via LANGCHAIN_TRACING_V2.\n"
-                "# The @traceable decorator adds a top-level span wrapping the full execution.\n"
-                "# Tracing is activated at runtime with the --dev flag.\n"
-            )
+        tracing_import = ""
+        tracing_decorator = ""
+        tracing_comment = ""
+        if self.config.tracing.enabled:
+            if self.config.tracing.provider == "langsmith":
+                tracing_import = "from langsmith import traceable\n\n"
+                tracing_decorator = f'@traceable(name="{self.config.project_name}")\n'
+                tracing_comment = (
+                    "\n# LangSmith tracing: LangChain calls are auto-traced via LANGCHAIN_TRACING_V2.\n"
+                    "# The @traceable decorator adds a top-level span wrapping the full execution.\n"
+                    "# Tracing is activated at runtime with the --dev flag.\n"
+                )
+            elif self.config.tracing.provider == "langfuse":
+                tracing_import = "from langfuse.decorators import observe\n\n"
+                tracing_decorator = f'@observe(name="{self.config.project_name}")\n'
+                tracing_comment = (
+                    "\n# Langfuse tracing: Use CallbackHandler for inner LangChain call visibility.\n"
+                    "# The @observe decorator adds a top-level trace wrapping the full execution.\n"
+                    "# Tracing is activated at runtime with the --dev flag (loads .env keys).\n"
+                )
         session_wrapper = self._render_session_wrapper()
         main_block = self._render_main_block()
         return f"""\
 # =============================================================================
 # 8. ENTRY POINT
 # =============================================================================
-{_principle_comments(8)}{langsmith_import}{langsmith_decorator}def run_agent(query: str, context: dict | None = None) -> str:
+{_principle_comments(8)}{tracing_import}{tracing_decorator}def run_agent(query: str, context: dict | None = None) -> str:
     \"\"\"Run the agent with a query string.
 
     Args:
@@ -411,4 +420,4 @@ def create_agent():
 
 {session_wrapper}
 {main_block}
-{langsmith_comment}"""
+{tracing_comment}"""
